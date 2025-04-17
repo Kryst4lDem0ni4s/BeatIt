@@ -4,10 +4,10 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import librosa
 import json
 import pickle
 import random
+import librosa
 import tqdm
 from pathlib import Path
 from transformers import AutoTokenizer, AutoModel, AutoProcessor, AutoFeatureExtractor
@@ -477,7 +477,7 @@ class VocalGenerator(nn.Module):
     def tokenize_audio(self, audio_waveform, sample_rate=None):
         """Convert audio waveform to tokens using the audio codec"""
         if sample_rate is not None and sample_rate != self.config.sample_rate:
-            # Resample audio if needed
+            # Resample audio if necessary
             audio_waveform = librosa.resample(
                 audio_waveform, 
                 orig_sr=sample_rate, 
