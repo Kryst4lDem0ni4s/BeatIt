@@ -5,11 +5,6 @@ from fastapi import FastAPI, HTTPException, status, APIRouter
 from fastapi import Request
 from backend.models.model_types import LoginRequest
 
-
-# Initialize Firebase Admin SDK
-# cred = credentials.Certificate("path/to/your/firebase/credentials.json")
-# firebase_admin.initialize_app(cred)
-
 app = FastAPI()
 router = APIRouter()
 logger = logging.getLogger(__name__)
