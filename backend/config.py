@@ -14,9 +14,9 @@ app.add_middleware(
 )
 
 class Settings(BaseSettings):
-    GOOGLE_APPLICATION_CREDENTIALS: str
+    # GOOGLE_APPLICATION_CREDENTIALS: str
     CREDENTIALS_FILE: str
-    DATABASE_URL: str
+    # DATABASE_URL: str
 
     class Config:
         env_file = './.env'

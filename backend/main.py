@@ -14,9 +14,9 @@ logger = setup_logger(__name__)
 app = FastAPI()
 load_dotenv()
 
-cref_file = os.getenv("CREDENTIALS_FILE")
+cred_file = os.getenv("CREDENTIALS_FILE")
 database_url = os.getenv("DATABASE_URL")
-cred = credentials.Certificate(cref_file)
+cred = credentials.Certificate(cred_file)
 firebase_admin.initialize_app(credential=cred, options={"databaseURL":database_url})
 
 app.add_middleware(

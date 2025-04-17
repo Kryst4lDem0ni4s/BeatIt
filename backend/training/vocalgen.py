@@ -15,6 +15,8 @@ from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 
+os.makedirs('checkpoints/vocalgen', exist_ok=True)
+
 def prepare_dataset(
     audio_dir, 
     output_dir, 
@@ -110,31 +112,35 @@ def prepare_dataset(
 
 
 class VocalGenerationConfig:
+    # """
+    # Usage Examples
+    # `Training the Model
+    # bash
+    # python -c vocalgen.py train        
+    # --data_dir data/vocals        
+    # --batch_size 16      
+    # --learning_rate 1e-4      
+    # --epochs 100      
+    # --checkpoint_dir checkpoints/vocalgen   
     
-    """Usage Examples
-    `Training the Model
-    bash
-    python vocal_generator.py train \
-        --data_dir data/vocals \
-        --batch_size 16 \
-        --learning_rate 1e-4 \
-        --epochs 100 \
-        --checkpoint_dir checkpoints/vocal_generator
-    Generating Vocals
-    bash
-    python vocal_generator.py generate \
-        --lyrics "I'm walking down the street on a sunny day" \
-        --prompt "A cheerful pop vocal with female voice" \
-        --gender 2 \
-        --tempo 120 \
-        --pitch 0 \
-        --duration 10 \
-        --checkpoint checkpoints/vocal_generator/checkpoint_epoch_100.pt \
-        --output_file output/vocals/cheerful_pop.wav
-    Interactive Mode
-    bash
-    python vocal_generator.py interactive \
-        --checkpoint checkpoints/vocal_generator/checkpoint_epoch_100.pt`"""
+    # python vocalgen.py 'train' '--data_dir' 'data/vocals' '--batch_size' '16' '--learning_rate' '1e-4' '--epochs' '100' '--checkpoint_dir' 'checkpoints/vocalgen'
+
+    
+    # Interactive Mode
+    # python vocalgen.py interactive --checkpoint checkpoints/vocalgen/checkpoint_epoch_100.pt`
+    
+    # Generating Vocals  
+    # python -c "import subprocess; subprocess.run([r'C:\Users\Khwaish\.vscode\BeatIt\backend\venv\Scripts\python', 'vocalgen.py', 'generate', 
+    # '--lyrics', 'I\'m walking down the street on a sunny day', 
+    # '--prompt', 'A cheerful pop vocal with female voice', 
+    # '--gender', '2', 
+    # '--tempo', '120', 
+    # '--pitch', '0', 
+    # '--duration', '10', 
+    # '--checkpoint', 'checkpoints/vocalgen/checkpoint_epoch_100.pt', 
+    # '--output_file', 'output/vocals/cheerful_pop.wav'])"
+    
+    # """
     
     def __init__(self):
         # Model architecture

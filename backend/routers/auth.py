@@ -7,8 +7,8 @@ from backend.models.model_types import LoginRequest
 
 
 # Initialize Firebase Admin SDK
-cred = credentials.Certificate("path/to/your/firebase/credentials.json")
-firebase_admin.initialize_app(cred)
+# cred = credentials.Certificate("path/to/your/firebase/credentials.json")
+# firebase_admin.initialize_app(cred)
 
 app = FastAPI()
 router = APIRouter()
