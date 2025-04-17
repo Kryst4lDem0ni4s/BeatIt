@@ -133,6 +133,8 @@
 //   @override
 //   bool shouldRepaint(CustomPainter oldDelegate) => false;
 // }
+import 'package:beat_it_frontend/pages/getstarted.dart';
+
 import 'library_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:blobs/blobs.dart';
