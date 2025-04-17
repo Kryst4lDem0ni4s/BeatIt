@@ -145,7 +145,7 @@ async def login(login_request: LoginRequest):
                 detail="User data not found in database"
             )
 
-        logger.info(f"User logged in successfully: {user.uid}")
+        logger.info("User logged in successfully: %s", user.uid)
 
         return {
             "status": "success",
