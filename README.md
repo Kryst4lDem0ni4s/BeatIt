@@ -140,7 +140,7 @@ REDIS_PORT=6379
   *Backend Engineer*  
   API development, audio processing workflows
 
-- **Bhavika & Anshika**  
+- **Bhavika & Karthikey**  
   *Frontend Team*  
   User interface, visualization systems
 
