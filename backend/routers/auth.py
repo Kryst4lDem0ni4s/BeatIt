@@ -165,3 +165,87 @@ async def login(login_request: LoginRequest):
             detail=f"Login failed: {str(e)}"
         ) from e
 
+@router.post("/forgot-password")
+async def forgot_password(request: Request):
+    try:
+        data = await request.json()
+        email = data.get("email")
+        
+        if not email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email is required"
+            )
+
+        # Generate password reset link
+        reset_link = auth.generate_password_reset_link(email)
+        
+        # TODO: Implement email sending logic here
+        logger.info(f"Password reset link generated: {reset_link}")
+        
+        # Always return success to prevent email enumeration
+        return {
+            "status": "success",
+            "message": "If an account exists, a password reset email has been sent"
+        }
+
+    except auth.UserNotFoundError:
+        # Log but still return success message
+        logger.info(f"Password reset requested for non-existent email: {email}")
+        return {
+            "status": "success",
+            "message": "If an account exists, a password reset email has been sent"
+        }
+        
+    except Exception as e:
+        logger.error(f"Password reset failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process password reset request"
+        ) from e
+
+@router.post("/logout")
+async def logout(request: Request):
+    try:
+        data = await request.json()
+        id_token = data.get("id_token")
+        
+        if not id_token:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="ID token is required"
+            )
+
+        # Verify ID token and get UID
+        decoded_token = auth.verify_id_token(id_token)
+        uid = decoded_token['uid']
+        
+        # Revoke all refresh tokens
+        auth.revoke_refresh_tokens(uid)
+        
+        logger.info(f"User logged out: {uid}")
+        return {
+            "status": "success",
+            "message": "Successfully logged out"
+        }
+
+    except auth.ExpiredIdTokenError as e:
+        logger.warning(f"Expired ID token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token expired"
+        ) from e
+        
+    except auth.InvalidIdTokenError as e:
+        logger.warning(f"Invalid ID token: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token"
+        ) from e
+        
+    except Exception as e:
+        logger.error(f"Logout failed: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Logout failed"
+        ) from e
