@@ -11,8 +11,7 @@ AI Music Generator for Musicians that need assistance
 An end-to-end AI-powered music composition system that combines textual descriptions, audio references, and musical parameters to generate custom tracks.
 
 ## 🔥 Key Features
-- **Multimodal Input Support** (Text + Audio + Parameters)
-- **Style Fusion Engine** ("Queen meets Hans Zimmer" combinations)
+- **Multimodel Input Support** (Text + Audio + Parameters)
 - **Vocal Synthesis** with pitch control
 - **Genre Avoidance System**
 - **Lyrics Integration** (Custom/Auto-generated)
@@ -22,7 +21,7 @@ An end-to-end AI-powered music composition system that combines textual descript
 ## 🛠 Technical Stack
 ### Backend
 - **Flask** (REST API)
-- **HuggingFace Transformers** (NER Model)
+- **PYTHON**
 - **Facebook AudioCraft** (Music Generation)
 - **Redis** (Task Queue)
 - **MongoDB** (User Data Storage)
