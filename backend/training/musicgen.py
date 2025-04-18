@@ -10,232 +10,17 @@ import json
 import pickle
 import tqdm
 import random
+import csv
 from pathlib import Path
 from transformers import AutoProcessor, MusicgenForConditionalGeneration, AutoTokenizer, AutoModel
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from lyricsgen import LyricsGenerator
-from vocalgen import VocalGenerator
-from instrumentalgen import InstrumentalGenerator
-from musicgen import integrate_with_previous_models
 
-def train_from_csv(csv_file, config, num_epochs=10, batch_size=4, learning_rate=1e-5):
-    """Train MusicGen model from CSV dataset"""
-    print(f"Converting CSV dataset from {csv_file} to MusicGen format...")
-    train_dir, val_dir = convert_csv_to_musicgen_dataset(
-        csv_file=csv_file, 
-        output_dir=config.data_dir,
-        split_ratio=0.9
-    )
-    
-    print("Creating datasets...")
-    train_dataset = MusicDataset(config, split="train")
-    val_dataset = MusicDataset(config, split="val")
-    
-    print("Creating model...")
-    generator = MusicGenerator(config)
-    
-    print(f"Starting training for {num_epochs} epochs...")
-    generator.train(
-        train_dataset=train_dataset,
-        val_dataset=val_dataset,
-        num_epochs=num_epochs,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        checkpoint_dir=config.checkpoint_dir
-    )
-    
-    return generator
-
-
-def convert_csv_to_musicgen_dataset(csv_file, output_dir, split_ratio=0.9):
-    """Convert CSV dataset to MusicGen training format"""
-    # Create output directories
-    train_dir = os.path.join(output_dir, "train")
-    val_dir = os.path.join(output_dir, "val")
-    
-    for directory in [
-        train_dir, val_dir,
-        os.path.join(train_dir, "audio"),
-        os.path.join(val_dir, "audio")
-    ]:
-        os.makedirs(directory, exist_ok=True)
-    
-    # Read CSV file
-    with open(csv_file, "r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-    
-    print(f"Found {len(rows)} entries in CSV file")
-    
-    # Process each entry
-    train_samples = []
-    val_samples = []
-    
-    for i, row in enumerate(tqdm(rows, desc="Processing files")):
-        try:
-            # Get file path and check if it exists
-            audio_path = row["Local_File_Path"]
-            if not os.path.exists(audio_path):
-                print(f"Warning: File not found: {audio_path}")
-                continue
-            
-            # Load audio to get duration and sample rate
-            audio, sr = librosa.load(audio_path, sr=None)
-            duration = librosa.get_duration(y=audio, sr=sr)
-            
-            # Skip if duration is too short or too long
-            if duration < 5 or duration > 180:  # Adjust thresholds as needed
-                print(f"Skipping {audio_path}: duration {duration}s out of range")
-                continue
-            
-            # Extract basic audio features
-            tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
-            
-            # Parse tags into style_themes
-            tags = row["Tags"].split(", ") if row["Tags"] else []
-            
-            # Create sample metadata
-            filename = f"{i:06d}.mp3"
-            sample = {
-                "audio_file": filename,
-                "original_path": audio_path,
-                "duration": float(duration),
-                "prompt": row["Prompt"] if row["Prompt"] and row["Prompt"] != "Prompt not found" else f"A music track with {', '.join(tags) if tags else 'melody'}",
-                "style_themes": tags,
-                "tempo": float(tempo),
-                "pitch": 0,  # Default pitch
-                "lyrics": row["Lyrics"] if row["Lyrics"] and row["Lyrics"] != "Lyrics not found" else "",
-                "name": row["Name"] if row["Name"] and row["Name"] != "Title not found" else f"Track {i}",
-                "instruments": []  # Unknown instruments
-            }
-            
-            # Decide if sample goes to train or validation set
-            if i < int(len(rows) * split_ratio):
-                # Copy audio file to train directory
-                output_path = os.path.join(train_dir, "audio", filename)
-                shutil.copy2(audio_path, output_path)
-                train_samples.append(sample)
-            else:
-                # Copy audio file to validation directory
-                output_path = os.path.join(val_dir, "audio", filename)
-                shutil.copy2(audio_path, output_path)
-                val_samples.append(sample)
-        
-        except Exception as e:
-            print(f"Error processing {row.get('Local_File_Path', 'unknown')}: {e}")
-    
-    # Save metadata
-    train_metadata = {"samples": train_samples}
-    val_metadata = {"samples": val_samples}
-    
-    with open(os.path.join(train_dir, "metadata.json"), "w") as f:
-        json.dump(train_metadata, f, indent=2)
-    
-    with open(os.path.join(val_dir, "metadata.json"), "w") as f:
-        json.dump(val_metadata, f, indent=2)
-    
-    print(f"Prepared {len(train_samples)} training samples and {len(val_samples)} validation samples")
-    return train_dir, val_dir
-
-def prepare_dataset(audio_dir, output_dir, split_ratio=0.9):
-    """Prepare dataset from raw audio files"""
-    # Create output directories
-    train_dir = os.path.join(output_dir, "train")
-    val_dir = os.path.join(output_dir, "val")
-    
-    for directory in [
-        train_dir, val_dir,
-        os.path.join(train_dir, "audio"),
-        os.path.join(val_dir, "audio")
-    ]:
-        os.makedirs(directory, exist_ok=True)
-    
-    # Find all audio files
-    audio_files = []
-    for root, _, files in os.walk(audio_dir):
-        for file in files:
-            if file.endswith((".wav", ".mp3", ".flac")):
-                audio_files.append(os.path.join(root, file))
-    
-    print(f"Found {len(audio_files)} audio files")
-    
-    # Process each file
-    train_samples = []
-    val_samples = []
-    
-    for i, audio_path in enumerate(tqdm.tqdm(audio_files)):
-        try:
-            # Load audio
-            audio, sr = librosa.load(audio_path, sr=None)
-            duration = librosa.get_duration(y=audio, sr=sr)
-            
-            # Skip if duration is too short or too long
-            if duration < 5 or duration > 30:
-                continue
-            
-            # Extract basic audio features for automatic annotation
-            tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
-            spectral_centroid = librosa.feature.spectral_centroid(y=audio, sr=sr).mean()
-            
-            # Simple heuristic to determine style/genre based on audio features
-            style = "unknown"
-            if tempo < 80:
-                style = "slow"
-            elif tempo < 120:
-                style = "medium"
-            else:
-                style = "fast"
-            
-            if spectral_centroid < 1000:
-                style += ", bass-heavy"
-            elif spectral_centroid < 2000:
-                style += ", balanced"
-            else:
-                style += ", treble-heavy"
-            
-            # Create sample metadata
-            filename = f"{i:06d}.wav"
-            sample = {
-                "audio_file": filename,
-                "original_path": audio_path,
-                "duration": duration,
-                "prompt": f"A {style} music track",
-                "style_themes": [style],
-                "tempo": tempo,
-                "pitch": 0,  # Default pitch
-                "instruments": []  # Unknown instruments
-            }
-            
-            # Decide if sample goes to train or validation set
-            if random.random() < split_ratio:
-                # Save audio file to train directory
-                output_path = os.path.join(train_dir, "audio", filename)
-                librosa.output.write_wav(output_path, audio, sr)
-                train_samples.append(sample)
-            else:
-                # Save audio file to validation directory
-                output_path = os.path.join(val_dir, "audio", filename)
-                librosa.output.write_wav(output_path, audio, sr)
-                val_samples.append(sample)
-        
-        except Exception as e:
-            print(f"Error processing {audio_path}: {e}")
-    
-    # Save metadata
-    train_metadata = {"samples": train_samples}
-    val_metadata = {"samples": val_samples}
-    
-    with open(os.path.join(train_dir, "metadata.json"), "w") as f:
-        json.dump(train_metadata, f, indent=2)
-    
-    with open(os.path.join(val_dir, "metadata.json"), "w") as f:
-        json.dump(val_metadata, f, indent=2)
-    
-    print(f"Prepared {len(train_samples)} training samples and {len(val_samples)} validation samples")
 
 class MusicGenConfig:
+    
+    """python musicgen.py train_csv --csv_file training_data/udio_songs_20250418_132910.csv --data_dir training_data/musicgen --batch_size 4 --learning_rate 1e-5 --epochs 10 --checkpoint_dir checkpoints/musicgen"""
     def __init__(self):
         # Model architecture
         self.model_name = "facebook/musicgen-melody"  # Base model for music generation
@@ -271,6 +56,7 @@ class MusicGenConfig:
         # Device
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
+
 class StyleEncoder(nn.Module):
     """Encodes style/theme text descriptions into embeddings"""
     def __init__(self, config):
@@ -298,6 +84,7 @@ class StyleEncoder(nn.Module):
         # Mean pooling - take mean of all token embeddings
         input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
         return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(input_mask_expanded.sum(1), min=1e-9)
+
 
 class MusicalAttributesEncoder(nn.Module):
     """Encodes musical attributes like tempo, pitch, etc."""
@@ -350,37 +137,163 @@ class MusicalAttributesEncoder(nn.Module):
         
         return projected
 
-class MusicGenerator:
-    """Usage Examples
-Training the Model
-bash
-python musicgen.py train \
-    --data_dir data/music \
-    --batch_size 4 \
-    --learning_rate 1e-5 \
-    --epochs 10 \
-    --checkpoint_dir checkpoints/musicgen
-Generating Music
-bash
-python musicgen.py generate \
-    --prompt "An upbeat pop song with catchy melody" \
-    --output_file output/music/pop_song.wav \
-    --style_themes "pop, upbeat, energetic" \
-    --tempo 120 \
-    --instruments "piano, guitar, drums" \
-    --duration 30
-Preparing a Dataset
-bash
-python musicgen.py prepare \
-    --audio_dir raw_audio \
-    --output_dir data/music \
-    --split_ratio 0.9
-Interactive Mode
-bash
-python musicgen.py interactive \
-    --checkpoint checkpoints/musicgen/checkpoint_epoch_10.pt
-    """
+
+class MusicDataset(Dataset):
+    """Dataset for training the music generator"""
+    def __init__(self, config, split="train"):
+        self.config = config
+        self.split = split
+        self.data_dir = os.path.join(config.data_dir, split)
+        
+        # Load metadata
+        with open(os.path.join(self.data_dir, "metadata.json"), "r") as f:
+            self.metadata = json.load(f)
+        
+        # Filter out invalid samples
+        self.samples = [s for s in self.metadata["samples"] if self._is_valid_sample(s)]
+        print(f"Loaded {len(self.samples)} {split} samples")
+        
+        # Initialize processor
+        self.processor = AutoProcessor.from_pretrained(config.model_name)
     
+    def _is_valid_sample(self, sample):
+        """Check if sample is valid"""
+        # Check if audio file exists
+        audio_path = os.path.join(self.data_dir, "audio", sample["audio_file"])
+        if not os.path.exists(audio_path):
+            return False
+        
+        # Check if sample has a prompt
+        if not sample.get("prompt"):
+            return False
+        
+        return True
+    
+    def __len__(self):
+        return len(self.samples)
+    
+    def __getitem__(self, idx):
+        sample = self.samples[idx]
+        
+        # Load audio
+        audio_path = os.path.join(self.data_dir, "audio", sample["audio_file"])
+        try:
+            audio, sr = librosa.load(audio_path, sr=self.config.sample_rate)
+        except Exception as e:
+            print(f"Error loading {audio_path}: {e}")
+            # Return a dummy sample
+            return {
+                "input_ids": torch.zeros(1, dtype=torch.long),
+                "attention_mask": torch.zeros(1, dtype=torch.long),
+                "audio_values": torch.zeros(1, 1),
+                "prompt": "",
+                "style_themes": [],
+                "instruments": [],
+                "tempo": 120,
+                "pitch": 0,
+                "duration": 10
+            }
+        
+        # Get prompt
+        prompt = sample.get("prompt", "")
+        
+        # Get style/themes
+        style_themes = sample.get("style_themes", [])
+        
+        # Get instruments
+        instruments = sample.get("instruments", [])
+        
+        # Get tempo
+        tempo = sample.get("tempo", 120)
+        
+        # Get pitch
+        pitch = sample.get("pitch", 0)
+        
+        # Get duration
+        duration = sample.get("duration", 30)
+        
+        # Trim audio if too long
+        max_samples = int(self.config.max_duration * sr)
+        if len(audio) > max_samples:
+            audio = audio[:max_samples]
+        
+        # Process audio with MusicGen processor
+        try:
+            inputs = self.processor(
+                text=[prompt],
+                padding=True,
+                return_tensors="pt"
+            )
+            
+            # Process audio separately
+            audio_inputs = self.processor(
+                audio=audio,
+                sampling_rate=sr,
+                return_tensors="pt"
+            )
+            
+            # Extract features
+            input_ids = inputs["input_ids"][0]
+            attention_mask = inputs["attention_mask"][0]
+            audio_values = audio_inputs.get("input_values", torch.zeros(1, 1))[0]
+            
+            return {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "audio_values": audio_values,
+                "prompt": prompt,
+                "style_themes": style_themes,
+                "instruments": instruments,
+                "tempo": tempo,
+                "pitch": pitch,
+                "duration": duration
+            }
+        except Exception as e:
+            print(f"Error processing {audio_path}: {e}")
+            # Return a dummy sample
+            return {
+                "input_ids": torch.zeros(1, dtype=torch.long),
+                "attention_mask": torch.zeros(1, dtype=torch.long),
+                "audio_values": torch.zeros(1, 1),
+                "prompt": "",
+                "style_themes": [],
+                "instruments": [],
+                "tempo": 120,
+                "pitch": 0,
+                "duration": 10
+            }
+    
+    def collate_fn(self, batch):
+        """Collate function for DataLoader"""
+        # Collect input_ids and attention_mask
+        input_ids = torch.stack([item["input_ids"] for item in batch])
+        attention_mask = torch.stack([item["attention_mask"] for item in batch])
+        
+        # Collect audio_values
+        audio_values = torch.stack([item["audio_values"] for item in batch])
+        
+        # Collect other items
+        prompts = [item["prompt"] for item in batch]
+        style_themes = [item["style_themes"] for item in batch]
+        instruments = [item["instruments"] for item in batch]
+        tempos = [item["tempo"] for item in batch]
+        pitches = [item["pitch"] for item in batch]
+        durations = [item["duration"] for item in batch]
+        
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "audio_values": audio_values,
+            "prompts": prompts,
+            "style_themes": style_themes,
+            "instruments": instruments,
+            "tempos": tempos,
+            "pitches": pitches,
+            "durations": durations
+        }
+
+
+class MusicGenerator:
     def __init__(self, config):
         self.config = config
         
@@ -624,7 +537,7 @@ python musicgen.py interactive \
             return audio_array
         
         return output_file
-
+    
     def train(self, train_dataset, val_dataset=None, num_epochs=None, batch_size=None, 
              learning_rate=None, checkpoint_dir=None, resume_from=None):
         """Train the model on the provided dataset"""
@@ -773,298 +686,223 @@ python musicgen.py interactive \
             }, checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
 
-class MusicDataset(Dataset):
-    """Dataset for training the music generator"""
-    def __init__(self, config, split="train"):
-        self.config = config
-        self.split = split
-        self.data_dir = os.path.join(config.data_dir, split)
-        
-        # Load metadata
-        with open(os.path.join(self.data_dir, "metadata.json"), "r") as f:
-            self.metadata = json.load(f)
-        
-        # Filter out invalid samples
-        self.samples = [s for s in self.metadata["samples"] if self._is_valid_sample(s)]
-        print(f"Loaded {len(self.samples)} {split} samples")
-        
-        # Initialize processor
-        self.processor = AutoProcessor.from_pretrained(config.model_name)
+
+def convert_csv_to_musicgen_dataset(csv_file, output_dir, split_ratio=0.9):
+    """Convert CSV dataset to MusicGen training format"""
+    # Create output directories
+    train_dir = os.path.join(output_dir, "train")
+    val_dir = os.path.join(output_dir, "val")
     
-    def _is_valid_sample(self, sample):
-        """Check if sample is valid"""
-        # Check if audio file exists
-        audio_path = os.path.join(self.data_dir, "audio", sample["audio_file"])
-        if not os.path.exists(audio_path):
-            return False
-        
-        # Check if sample has a prompt
-        if not sample.get("prompt"):
-            return False
-        
-        return True
+    for directory in [
+        train_dir, val_dir,
+        os.path.join(train_dir, "audio"),
+        os.path.join(val_dir, "audio")
+    ]:
+        os.makedirs(directory, exist_ok=True)
     
-    def __len__(self):
-        return len(self.samples)
+    # Read CSV file
+    with open(csv_file, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
     
-    def __getitem__(self, idx):
-        sample = self.samples[idx]
-        
-        # Load audio
-        audio_path = os.path.join(self.data_dir, "audio", sample["audio_file"])
+    print(f"Found {len(rows)} entries in CSV file")
+    
+    # Process each entry
+    train_samples = []
+    val_samples = []
+    
+    for i, row in enumerate(tqdm.tqdm(rows, desc="Processing files")):
         try:
-            audio, sr = librosa.load(audio_path, sr=self.config.sample_rate)
+            # Get file path and check if it exists
+            audio_path = row["Local_File_Path"]
+            if not os.path.exists(audio_path):
+                print(f"Warning: File not found: {audio_path}")
+                continue
+            
+            # Load audio to get duration and sample rate
+            audio, sr = librosa.load(audio_path, sr=None)
+            duration = librosa.get_duration(y=audio, sr=sr)
+            
+            # Skip if duration is too short or too long
+            if duration < 5 or duration > 180:  # Adjust thresholds as needed
+                print(f"Skipping {audio_path}: duration {duration}s out of range")
+                continue
+            
+            # Extract basic audio features
+            tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
+            
+            # Parse tags into style_themes
+            tags = row.get("Tags", "").split(", ") if row.get("Tags") else []
+            
+            # Create sample metadata
+            filename = f"{i:06d}.mp3"
+            sample = {
+                "audio_file": filename,
+                "original_path": audio_path,
+                "duration": float(duration),
+                "prompt": row.get("Prompt", "") if row.get("Prompt") and row.get("Prompt") != "Prompt not found" else f"A music track with {', '.join(tags) if tags else 'melody'}",
+                "style_themes": tags,
+                "tempo": float(tempo),
+                "pitch": 0,  # Default pitch
+                "lyrics": row.get("Lyrics", "") if row.get("Lyrics") and row.get("Lyrics") != "Lyrics not found" else "",
+                "name": row.get("Name", "") if row.get("Name") and row.get("Name") != "Title not found" else f"Track {i}",
+                "instruments": []  # Unknown instruments
+            }
+            
+            # Decide if sample goes to train or validation set
+            if i < int(len(rows) * split_ratio):
+                # Copy audio file to train directory
+                output_path = os.path.join(train_dir, "audio", filename)
+                shutil.copy2(audio_path, output_path)
+                train_samples.append(sample)
+            else:
+                # Copy audio file to validation directory
+                output_path = os.path.join(val_dir, "audio", filename)
+                shutil.copy2(audio_path, output_path)
+                val_samples.append(sample)
+        
         except Exception as e:
-            print(f"Error loading {audio_path}: {e}")
-            # Return a dummy sample
-            return {
-                "input_ids": torch.zeros(1, dtype=torch.long),
-                "attention_mask": torch.zeros(1, dtype=torch.long),
-                "audio_values": torch.zeros(1, 1),
-                "prompt": "",
-                "style_themes": [],
-                "instruments": [],
-                "tempo": 120,
-                "pitch": 0,
-                "duration": 10
-            }
-        
-        # Get prompt
-        prompt = sample.get("prompt", "")
-        
-        # Get style/themes
-        style_themes = sample.get("style_themes", [])
-        
-        # Get instruments
-        instruments = sample.get("instruments", [])
-        
-        # Get tempo
-        tempo = sample.get("tempo", 120)
-        
-        # Get pitch
-        pitch = sample.get("pitch", 0)
-        
-        # Get duration
-        duration = sample.get("duration", 30)
-        
-        # Trim audio if too long
-        max_samples = int(self.config.max_duration * sr)
-        if len(audio) > max_samples:
-            audio = audio[:max_samples]
-        
-        # Process audio with MusicGen processor
+            print(f"Error processing {row.get('Local_File_Path', 'unknown')}: {e}")
+    
+    # Save metadata
+    train_metadata = {"samples": train_samples}
+    val_metadata = {"samples": val_samples}
+    
+    with open(os.path.join(train_dir, "metadata.json"), "w") as f:
+        json.dump(train_metadata, f, indent=2)
+    
+    with open(os.path.join(val_dir, "metadata.json"), "w") as f:
+        json.dump(val_metadata, f, indent=2)
+    
+    print(f"Prepared {len(train_samples)} training samples and {len(val_samples)} validation samples")
+    return train_dir, val_dir
+
+
+def prepare_dataset(audio_dir, output_dir, split_ratio=0.9):
+    """Prepare dataset from raw audio files"""
+    # Create output directories
+    train_dir = os.path.join(output_dir, "train")
+    val_dir = os.path.join(output_dir, "val")
+    
+    for directory in [
+        train_dir, val_dir,
+        os.path.join(train_dir, "audio"),
+        os.path.join(val_dir, "audio")
+    ]:
+        os.makedirs(directory, exist_ok=True)
+    
+    # Find all audio files
+    audio_files = []
+    for root, _, files in os.walk(audio_dir):
+        for file in files:
+            if file.endswith((".wav", ".mp3", ".flac")):
+                audio_files.append(os.path.join(root, file))
+    
+    print(f"Found {len(audio_files)} audio files")
+    
+    # Process each file
+    train_samples = []
+    val_samples = []
+    
+    for i, audio_path in enumerate(tqdm.tqdm(audio_files)):
         try:
-            inputs = self.processor(
-                text=[prompt],
-                padding=True,
-                return_tensors="pt"
-            )
+            # Load audio
+            audio, sr = librosa.load(audio_path, sr=None)
+            duration = librosa.get_duration(y=audio, sr=sr)
             
-            # Process audio separately
-            audio_inputs = self.processor(
-                audio=audio,
-                sampling_rate=sr,
-                return_tensors="pt"
-            )
+            # Skip if duration is too short or too long
+            if duration < 5 or duration > 30:
+                continue
             
-            # Extract features
-            input_ids = inputs["input_ids"][0]
-            attention_mask = inputs["attention_mask"][0]
-            audio_values = audio_inputs.get("input_values", torch.zeros(1, 1))[0]
+            # Extract basic audio features for automatic annotation
+            tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
+            spectral_centroid = librosa.feature.spectral_centroid(y=audio, sr=sr).mean()
             
-            return {
-                "input_ids": input_ids,
-                "attention_mask": attention_mask,
-                "audio_values": audio_values,
-                "prompt": prompt,
-                "style_themes": style_themes,
-                "instruments": instruments,
+            # Simple heuristic to determine style/genre based on audio features
+            style = "unknown"
+            if tempo < 80:
+                style = "slow"
+            elif tempo < 120:
+                style = "medium"
+            else:
+                style = "fast"
+            
+            if spectral_centroid < 1000:
+                style += ", bass-heavy"
+            elif spectral_centroid < 2000:
+                style += ", balanced"
+            else:
+                style += ", treble-heavy"
+            
+            # Create sample metadata
+            filename = f"{i:06d}.wav"
+            sample = {
+                "audio_file": filename,
+                "original_path": audio_path,
+                "duration": duration,
+                "prompt": f"A {style} music track",
+                "style_themes": [style],
                 "tempo": tempo,
-                "pitch": pitch,
-                "duration": duration
+                "pitch": 0,  # Default pitch
+                "instruments": []  # Unknown instruments
             }
+            
+            # Decide if sample goes to train or validation set
+            if random.random() < split_ratio:
+                # Save audio file to train directory
+                output_path = os.path.join(train_dir, "audio", filename)
+                librosa.output.write_wav(output_path, audio, sr)
+                train_samples.append(sample)
+            else:
+                # Save audio file to validation directory
+                output_path = os.path.join(val_dir, "audio", filename)
+                librosa.output.write_wav(output_path, audio, sr)
+                val_samples.append(sample)
+        
         except Exception as e:
             print(f"Error processing {audio_path}: {e}")
-            # Return a dummy sample
-            return {
-                "input_ids": torch.zeros(1, dtype=torch.long),
-                "attention_mask": torch.zeros(1, dtype=torch.long),
-                "audio_values": torch.zeros(1, 1),
-                "prompt": "",
-                "style_themes": [],
-                "instruments": [],
-                "tempo": 120,
-                "pitch": 0,
-                "duration": 10
-            }
+    
+    # Save metadata
+    train_metadata = {"samples": train_samples}
+    val_metadata = {"samples": val_samples}
+    
+    with open(os.path.join(train_dir, "metadata.json"), "w") as f:
+        json.dump(train_metadata, f, indent=2)
+    
+    with open(os.path.join(val_dir, "metadata.json"), "w") as f:
+        json.dump(val_metadata, f, indent=2)
+    
+    print(f"Prepared {len(train_samples)} training samples and {len(val_samples)} validation samples")
 
-    
-    def collate_fn(self, batch):
-        """Collate function for DataLoader"""
-        # Collect input_ids and attention_mask
-        input_ids = torch.stack([item["input_ids"] for item in batch])
-        attention_mask = torch.stack([item["attention_mask"] for item in batch])
-        
-        # Collect audio_values
-        audio_values = torch.stack([item["audio_values"] for item in batch])
-        
-        # Collect other items
-        prompts = [item["prompt"] for item in batch]
-        style_themes = [item["style_themes"] for item in batch]
-        instruments = [item["instruments"] for item in batch]
-        tempos = [item["tempo"] for item in batch]
-        pitches = [item["pitch"] for item in batch]
-        durations = [item["duration"] for item in batch]
-        
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "audio_values": audio_values,
-            "prompts": prompts,
-            "style_themes": style_themes,
-            "instruments": instruments,
-            "tempos": tempos,
-            "pitches": pitches,
-            "durations": durations
-        }
 
-def main():
-    """Main function for training and generating music"""
-    parser = argparse.ArgumentParser(description="Music Generation System")
-    subparsers = parser.add_subparsers(dest="mode", help="Mode")
+def train_from_csv(csv_file, config, num_epochs=10, batch_size=4, learning_rate=1e-5):
+    """Train MusicGen model from CSV dataset"""
+    print(f"Converting CSV dataset from {csv_file} to MusicGen format...")
+    train_dir, val_dir = convert_csv_to_musicgen_dataset(
+        csv_file=csv_file, 
+        output_dir=config.data_dir,
+        split_ratio=0.9
+    )
     
-    # Training parser
-    train_parser = subparsers.add_parser("train", help="Train the model")
-    train_parser.add_argument("--data_dir", type=str, default="data/music", help="Data directory")
-    train_parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
-    train_parser.add_argument("--learning_rate", type=float, default=1e-5, help="Learning rate")
-    train_parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
-    train_parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/musicgen", help="Checkpoint directory")
-    train_parser.add_argument("--resume_from", type=str, default=None, help="Resume from checkpoint")
+    print("Creating datasets...")
+    train_dataset = MusicDataset(config, split="train")
+    val_dataset = MusicDataset(config, split="val")
     
-    # Generation parser
-    gen_parser = subparsers.add_parser("generate", help="Generate music")
-    gen_parser.add_argument("--prompt", type=str, required=True, help="Text prompt for music generation")
-    gen_parser.add_argument("--output_file", type=str, default="output/music/generated.wav", help="Output audio file")
-    gen_parser.add_argument("--audio_reference", type=str, default=None, help="Audio reference file")
-    gen_parser.add_argument("--lyrics", type=str, default=None, help="Lyrics file or text")
-    gen_parser.add_argument("--style_themes", type=str, default=None, help="Style/themes (comma-separated)")
-    gen_parser.add_argument("--avoid_themes", type=str, default=None, help="Themes to avoid (comma-separated)")
-    gen_parser.add_argument("--tempo", type=float, default=None, help="Tempo in BPM")
-    gen_parser.add_argument("--pitch", type=float, default=None, help="Pitch adjustment")
-    gen_parser.add_argument("--duration", type=float, default=30, help="Duration in seconds")
-    gen_parser.add_argument("--instruments", type=str, default=None, help="Instruments to include (comma-separated)")
-    gen_parser.add_argument("--avoid_instruments", type=str, default=None, help="Instruments to avoid (comma-separated)")
-    gen_parser.add_argument("--vocals_file", type=str, default=None, help="Vocals file for integration")
-    gen_parser.add_argument("--instrumental_file", type=str, default=None, help="Instrumental file for integration")
-    gen_parser.add_argument("--guidance_scale", type=float, default=None, help="Guidance scale for generation")
-    gen_parser.add_argument("--checkpoint", type=str, default=None, help="Model checkpoint")
+    print("Creating model...")
+    generator = MusicGenerator(config)
     
-    # Prepare dataset parser
-    prep_parser = subparsers.add_parser("prepare", help="Prepare dataset")
-    prep_parser.add_argument("--audio_dir", type=str, required=True, help="Audio directory")
-    prep_parser.add_argument("--output_dir", type=str, default="data/music", help="Output directory")
-    prep_parser.add_argument("--split_ratio", type=float, default=0.9, help="Train/val split ratio")
+    print(f"Starting training for {num_epochs} epochs...")
+    generator.train(
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+        num_epochs=num_epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        checkpoint_dir=config.checkpoint_dir
+    )
     
-    # Interactive parser
-    interactive_parser = subparsers.add_parser("interactive", help="Interactive mode")
-    interactive_parser.add_argument("--checkpoint", type=str, default=None, help="Model checkpoint")
-    
-    args = parser.parse_args()
-    
-    # Create config
-    config = MusicGenConfig()
-    
-    if args.mode == "train":
-        # Update config with command line arguments
-        config.data_dir = args.data_dir
-        config.batch_size = args.batch_size
-        config.learning_rate = args.learning_rate
-        config.max_epochs = args.epochs
-        config.checkpoint_dir = args.checkpoint_dir
-        
-        # Create datasets
-        train_dataset = MusicDataset(config, split="train")
-        val_dataset = MusicDataset(config, split="val")
-        
-        # Create model
-        generator = MusicGenerator(config)
-        
-        # Train model
-        generator.train(
-            train_dataset=train_dataset,
-            val_dataset=val_dataset,
-            num_epochs=args.epochs,
-            batch_size=args.batch_size,
-            learning_rate=args.learning_rate,
-            checkpoint_dir=args.checkpoint_dir,
-            resume_from=args.resume_from
-        )
-    
-    elif args.mode == "generate":
-        # Create model
-        generator = MusicGenerator(config)
-        
-        # Load checkpoint if provided
-        if args.checkpoint:
-            generator.load_checkpoint(args.checkpoint)
-        
-        # Parse style themes
-        style_themes = None
-        if args.style_themes:
-            style_themes = [theme.strip() for theme in args.style_themes.split(",")]
-        
-        # Parse avoid themes
-        avoid_themes = None
-        if args.avoid_themes:
-            avoid_themes = [theme.strip() for theme in args.avoid_themes.split(",")]
-        
-        # Parse instruments
-        instruments = None
-        if args.instruments:
-            instruments = [instrument.strip() for instrument in args.instruments.split(",")]
-        
-        # Parse avoid instruments
-        avoid_instruments = None
-        if args.avoid_instruments:
-            avoid_instruments = [instrument.strip() for instrument in args.avoid_instruments.split(",")]
-        
-        # Generate music
-        generator.generate(
-            prompt=args.prompt,
-            output_file=args.output_file,
-            audio_reference=args.audio_reference,
-            lyrics=args.lyrics,
-            style_themes=style_themes,
-            avoid_themes=avoid_themes,
-            tempo=args.tempo,
-            pitch=args.pitch,
-            duration=args.duration,
-            instruments=instruments,
-            avoid_instruments=avoid_instruments,
-            vocals_file=args.vocals_file,
-            instrumental_file=args.instrumental_file,
-            guidance_scale=args.guidance_scale
-        )
-    
-    elif args.mode == "prepare":
-        # Prepare dataset
-        prepare_dataset(
-            audio_dir=args.audio_dir,
-            output_dir=args.output_dir,
-            split_ratio=args.split_ratio
-        )
-    
-    elif args.mode == "interactive":
-        # Create model
-        generator = MusicGenerator(config)
-        
-        # Load checkpoint if provided
-        if args.checkpoint:
-            generator.load_checkpoint(args.checkpoint)
-        
-        # Interactive mode
-        interactive_generation(generator)
+    return generator
+
 
 def interactive_generation(generator):
     """Interactive mode for music generation"""
@@ -1198,114 +1036,172 @@ def interactive_generation(generator):
             instrumental_file=instrumental_file
         )
         print("Done!")
-        
-def integrate_with_previous_models(prompt, output_file, lyrics_generator=None, vocal_generator=None, 
-                                  instrumental_generator=None, **kwargs):
-    """Integrate with previous models for end-to-end music generation"""
+
+
+def main():
+    """Main function for training and generating music"""
+    parser = argparse.ArgumentParser(description="Music Generation System")
+    subparsers = parser.add_subparsers(dest="mode", help="Mode")
+    
+    # Training parser
+    train_parser = subparsers.add_parser("train", help="Train the model")
+    train_parser.add_argument("--data_dir", type=str, default="data/music", help="Data directory")
+    train_parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    train_parser.add_argument("--learning_rate", type=float, default=1e-5, help="Learning rate")
+    train_parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
+    train_parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/musicgen", help="Checkpoint directory")
+    train_parser.add_argument("--resume_from", type=str, default=None, help="Resume from checkpoint")
+    
+    # Generation parser
+    gen_parser = subparsers.add_parser("generate", help="Generate music")
+    gen_parser.add_argument("--prompt", type=str, required=True, help="Text prompt for music generation")
+    gen_parser.add_argument("--output_file", type=str, default="output/music/generated.wav", help="Output audio file")
+    gen_parser.add_argument("--audio_reference", type=str, default=None, help="Audio reference file")
+    gen_parser.add_argument("--lyrics", type=str, default=None, help="Lyrics file or text")
+    gen_parser.add_argument("--style_themes", type=str, default=None, help="Style/themes (comma-separated)")
+    gen_parser.add_argument("--avoid_themes", type=str, default=None, help="Themes to avoid (comma-separated)")
+    gen_parser.add_argument("--tempo", type=float, default=None, help="Tempo in BPM")
+    gen_parser.add_argument("--pitch", type=float, default=None, help="Pitch adjustment")
+    gen_parser.add_argument("--duration", type=float, default=30, help="Duration in seconds")
+    gen_parser.add_argument("--instruments", type=str, default=None, help="Instruments to include (comma-separated)")
+    gen_parser.add_argument("--avoid_instruments", type=str, default=None, help="Instruments to avoid (comma-separated)")
+    gen_parser.add_argument("--vocals_file", type=str, default=None, help="Vocals file for integration")
+    gen_parser.add_argument("--instrumental_file", type=str, default=None, help="Instrumental file for integration")
+    gen_parser.add_argument("--guidance_scale", type=float, default=None, help="Guidance scale for generation")
+    gen_parser.add_argument("--checkpoint", type=str, default=None, help="Model checkpoint")
+    
+    # Prepare dataset parser
+    prep_parser = subparsers.add_parser("prepare", help="Prepare dataset")
+    prep_parser.add_argument("--audio_dir", type=str, required=True, help="Audio directory")
+    prep_parser.add_argument("--output_dir", type=str, default="data/music", help="Output directory")
+    prep_parser.add_argument("--split_ratio", type=float, default=0.9, help="Train/val split ratio")
+    
+    # CSV training parser
+    csv_parser = subparsers.add_parser("train_csv", help="Train from CSV dataset")
+    csv_parser.add_argument("--csv_file", type=str, required=True, help="CSV file with dataset")
+    csv_parser.add_argument("--data_dir", type=str, default="data/music", help="Data directory")
+    csv_parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    csv_parser.add_argument("--learning_rate", type=float, default=1e-5, help="Learning rate")
+    csv_parser.add_argument("--epochs", type=int, default=10, help="Number of epochs")
+    csv_parser.add_argument("--checkpoint_dir", type=str, default="checkpoints/musicgen", help="Checkpoint directory")
+    
+    # Interactive parser
+    interactive_parser = subparsers.add_parser("interactive", help="Interactive mode")
+    interactive_parser.add_argument("--checkpoint", type=str, default=None, help="Model checkpoint")
+    
+    args = parser.parse_args()
+    
     # Create config
     config = MusicGenConfig()
     
-    # Create music generator
-    music_generator = MusicGenerator(config)
-    
-    # Load checkpoint if provided
-    if 'checkpoint' in kwargs and kwargs['checkpoint']:
-        music_generator.load_checkpoint(kwargs['checkpoint'])
-    
-    # Generate lyrics if lyrics_generator is provided and lyrics are not
-    lyrics = kwargs.get('lyrics')
-    if lyrics_generator is not None and not lyrics:
-        print("Generating lyrics...")
-        lyrics = lyrics_generator.generate_lyrics(
-            prompt=prompt,
-            style_themes=kwargs.get('style_themes'),
-            tempo=kwargs.get('tempo')
+    if args.mode == "train":
+        # Update config with command line arguments
+        config.data_dir = args.data_dir
+        config.batch_size = args.batch_size
+        config.learning_rate = args.learning_rate
+        config.max_epochs = args.epochs
+        config.checkpoint_dir = args.checkpoint_dir
+        
+        # Create datasets
+        train_dataset = MusicDataset(config, split="train")
+        val_dataset = MusicDataset(config, split="val")
+        
+        # Create model
+        generator = MusicGenerator(config)
+        
+        # Train model
+        generator.train(
+            train_dataset=train_dataset,
+            val_dataset=val_dataset,
+            num_epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate,
+            checkpoint_dir=args.checkpoint_dir,
+            resume_from=args.resume_from
         )
-        print(f"Generated lyrics:\n{lyrics}")
     
-    # Generate vocals if vocal_generator is provided and lyrics are available
-    vocals_file = kwargs.get('vocals_file')
-    if vocal_generator is not None and lyrics and not vocals_file:
-        print("Generating vocals...")
-        vocals_file = "output/vocals/temp_vocals.wav"
-        vocal_generator.generate_vocals(
-            lyrics=lyrics,
-            prompt=prompt,
-            gender=kwargs.get('gender', 0),
-            tempo=kwargs.get('tempo'),
-            pitch=kwargs.get('pitch'),
-            output_file=vocals_file
+    elif args.mode == "generate":
+        # Create model
+        generator = MusicGenerator(config)
+        
+        # Load checkpoint if provided
+        if args.checkpoint:
+            generator.load_checkpoint(args.checkpoint)
+        
+        # Parse style themes
+        style_themes = None
+        if args.style_themes:
+            style_themes = [theme.strip() for theme in args.style_themes.split(",")]
+        
+        # Parse avoid themes
+        avoid_themes = None
+        if args.avoid_themes:
+            avoid_themes = [theme.strip() for theme in args.avoid_themes.split(",")]
+        
+        # Parse instruments
+        instruments = None
+        if args.instruments:
+            instruments = [instrument.strip() for instrument in args.instruments.split(",")]
+        
+        # Parse avoid instruments
+        avoid_instruments = None
+        if args.avoid_instruments:
+            avoid_instruments = [instrument.strip() for instrument in args.avoid_instruments.split(",")]
+        
+        # Generate music
+        generator.generate(
+            prompt=args.prompt,
+            output_file=args.output_file,
+            audio_reference=args.audio_reference,
+            lyrics=args.lyrics,
+            style_themes=style_themes,
+            avoid_themes=avoid_themes,
+            tempo=args.tempo,
+            pitch=args.pitch,
+            duration=args.duration,
+            instruments=instruments,
+            avoid_instruments=avoid_instruments,
+            vocals_file=args.vocals_file,
+            instrumental_file=args.instrumental_file,
+            guidance_scale=args.guidance_scale
         )
-        print(f"Generated vocals saved to {vocals_file}")
     
-    # Generate instrumental if instrumental_generator is provided
-    instrumental_file = kwargs.get('instrumental_file')
-    if instrumental_generator is not None and not instrumental_file:
-        print("Generating instrumental...")
-        instrumental_file = "output/instrumental/temp_instrumental.wav"
-        instrumental_generator.generate(
-            text_prompt=prompt,
-            instruments=kwargs.get('instruments'),
-            avoid_instruments=kwargs.get('avoid_instruments'),
-            tempo=kwargs.get('tempo'),
-            pitch=kwargs.get('pitch'),
-            output_file=instrumental_file
+    elif args.mode == "prepare":
+        # Prepare dataset
+        prepare_dataset(
+            audio_dir=args.audio_dir,
+            output_dir=args.output_dir,
+            split_ratio=args.split_ratio
         )
-        print(f"Generated instrumental saved to {instrumental_file}")
     
-    # Generate final music
-    print("Generating final music...")
-    music_generator.generate(
-        prompt=prompt,
-        output_file=output_file,
-        audio_reference=kwargs.get('audio_reference'),
-        lyrics=lyrics,
-        style_themes=kwargs.get('style_themes'),
-        avoid_themes=kwargs.get('avoid_themes'),
-        tempo=kwargs.get('tempo'),
-        pitch=kwargs.get('pitch'),
-        duration=kwargs.get('duration', 30),
-        instruments=kwargs.get('instruments'),
-        avoid_instruments=kwargs.get('avoid_instruments'),
-        vocals_file=vocals_file,
-        instrumental_file=instrumental_file,
-        guidance_scale=kwargs.get('guidance_scale')
-    )
-    print(f"Final music saved to {output_file}")
+    elif args.mode == "train_csv":
+        # Update config with command line arguments
+        config.data_dir = args.data_dir
+        config.batch_size = args.batch_size
+        config.learning_rate = args.learning_rate
+        config.max_epochs = args.epochs
+        config.checkpoint_dir = args.checkpoint_dir
+        
+        # Train from CSV
+        train_from_csv(
+            csv_file=args.csv_file,
+            config=config,
+            num_epochs=args.epochs,
+            batch_size=args.batch_size,
+            learning_rate=args.learning_rate
+        )
     
-    # Clean up temporary files
-    if vocals_file and vocals_file.startswith("output/vocals/temp_"):
-        os.remove(vocals_file)
-    if instrumental_file and instrumental_file.startswith("output/instrumental/temp_"):
-        os.remove(instrumental_file)
-    
-    return output_file
+    elif args.mode == "interactive":
+        # Create model
+        generator = MusicGenerator(config)
+        
+        # Load checkpoint if provided
+        if args.checkpoint:
+            generator.load_checkpoint(args.checkpoint)
+        
+        # Interactive mode
+        interactive_generation(generator)
 
-# Initialize generators
-lyrics_generator = LyricsGenerator(checkpoint="checkpoints/lyrics_generator/checkpoint_epoch_10.pt")
-vocal_generator = VocalGenerator(checkpoint="checkpoints/vocal_generator/checkpoint_epoch_10.pt")
-instrumental_generator = InstrumentalGenerator(checkpoint="checkpoints/instrumental_generator/checkpoint_epoch_10.pt")
-
-# Generate complete music
-integrate_with_previous_models(
-    prompt="A cheerful pop song about summer days",
-    output_file="output/music/summer_song.wav",
-    lyrics_generator=lyrics_generator,
-    vocal_generator=vocal_generator,
-    instrumental_generator=instrumental_generator,
-    style_themes=["pop", "cheerful", "summer"],
-    tempo=120,
-    instruments=["piano", "guitar", "drums"],
-    gender=2,  # Female voice
-    duration=60
-)
 
 if __name__ == "__main__":
     main()
-    parser = argparse.ArgumentParser(description="Convert CSV dataset to MusicGen format")
-    parser.add_argument("--csv_file", type=str, required=True, help="Input CSV file")
-    parser.add_argument("--output_dir", type=str, default="data/music", help="Output directory")
-    parser.add_argument("--split_ratio", type=float, default=0.9, help="Train/val split ratio")
-    
-    args = parser.parse_args()
-    convert_csv_to_musicgen_dataset(args.csv_file, args.output_dir, args.split_ratio)
