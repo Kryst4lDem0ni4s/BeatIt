@@ -29,10 +29,10 @@ An end-to-end AI-powered music composition system that combines textual descript
 - **AWS S3** (Audio Storage)
 
 ### Frontend
-- **React.js** (Web Interface)
-- **Waveform Visualizer** (Web Audio API)
-- **D3.js** (Music Parameter Visualization)
-- **React Testing Library**
+- Flutter & Dart (Cross-platform App Interface)
+- Waveform Visualizer (Custom Widget using Audio Data)
+- D3-like Visualizations (Handled via Flutter packages for charts/animations)
+- Flutter Test (For widget and unit testing
 
 ## 🌐 System Architecture
 ```
