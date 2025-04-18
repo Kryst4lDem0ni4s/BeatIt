@@ -1205,3 +1205,28 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+"""from musicgen import integrate_with_previous_models
+from lyricsgen import LyricsGenerator
+from vocalgen import VocalGenerator
+from instrumentalgen import InstrumentalGenerator
+
+# Initialize all models
+lyrics_gen = LyricsGenerator(checkpoint="checkpoints/lyrics_generator/checkpoint_epoch_10.pt")
+vocal_gen = VocalGenerator(checkpoint="checkpoints/vocal_generator/checkpoint_epoch_10.pt")
+instrumental_gen = InstrumentalGenerator(checkpoint="checkpoints/instrumental_generator/checkpoint_epoch_10.pt")
+
+# Generate complete music
+integrate_with_previous_models(
+    prompt="A cheerful pop song about summer days",
+    output_file="output/music/summer_song.wav",
+    lyrics_generator=lyrics_gen,
+    vocal_generator=vocal_gen,
+    instrumental_generator=instrumental_gen,
+    style_themes=["pop", "cheerful", "summer"],
+    tempo=120,
+    instruments=["piano", "guitar", "drums"],
+    duration=60
+)
+"""
