@@ -1,5 +1,6 @@
 import os
 import argparse
+import shutil
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,6 +19,125 @@ from lyricsgen import LyricsGenerator
 from vocalgen import VocalGenerator
 from instrumentalgen import InstrumentalGenerator
 from musicgen import integrate_with_previous_models
+
+def train_from_csv(csv_file, config, num_epochs=10, batch_size=4, learning_rate=1e-5):
+    """Train MusicGen model from CSV dataset"""
+    print(f"Converting CSV dataset from {csv_file} to MusicGen format...")
+    train_dir, val_dir = convert_csv_to_musicgen_dataset(
+        csv_file=csv_file, 
+        output_dir=config.data_dir,
+        split_ratio=0.9
+    )
+    
+    print("Creating datasets...")
+    train_dataset = MusicDataset(config, split="train")
+    val_dataset = MusicDataset(config, split="val")
+    
+    print("Creating model...")
+    generator = MusicGenerator(config)
+    
+    print(f"Starting training for {num_epochs} epochs...")
+    generator.train(
+        train_dataset=train_dataset,
+        val_dataset=val_dataset,
+        num_epochs=num_epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        checkpoint_dir=config.checkpoint_dir
+    )
+    
+    return generator
+
+
+def convert_csv_to_musicgen_dataset(csv_file, output_dir, split_ratio=0.9):
+    """Convert CSV dataset to MusicGen training format"""
+    # Create output directories
+    train_dir = os.path.join(output_dir, "train")
+    val_dir = os.path.join(output_dir, "val")
+    
+    for directory in [
+        train_dir, val_dir,
+        os.path.join(train_dir, "audio"),
+        os.path.join(val_dir, "audio")
+    ]:
+        os.makedirs(directory, exist_ok=True)
+    
+    # Read CSV file
+    with open(csv_file, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+    
+    print(f"Found {len(rows)} entries in CSV file")
+    
+    # Process each entry
+    train_samples = []
+    val_samples = []
+    
+    for i, row in enumerate(tqdm(rows, desc="Processing files")):
+        try:
+            # Get file path and check if it exists
+            audio_path = row["Local_File_Path"]
+            if not os.path.exists(audio_path):
+                print(f"Warning: File not found: {audio_path}")
+                continue
+            
+            # Load audio to get duration and sample rate
+            audio, sr = librosa.load(audio_path, sr=None)
+            duration = librosa.get_duration(y=audio, sr=sr)
+            
+            # Skip if duration is too short or too long
+            if duration < 5 or duration > 180:  # Adjust thresholds as needed
+                print(f"Skipping {audio_path}: duration {duration}s out of range")
+                continue
+            
+            # Extract basic audio features
+            tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
+            
+            # Parse tags into style_themes
+            tags = row["Tags"].split(", ") if row["Tags"] else []
+            
+            # Create sample metadata
+            filename = f"{i:06d}.mp3"
+            sample = {
+                "audio_file": filename,
+                "original_path": audio_path,
+                "duration": float(duration),
+                "prompt": row["Prompt"] if row["Prompt"] and row["Prompt"] != "Prompt not found" else f"A music track with {', '.join(tags) if tags else 'melody'}",
+                "style_themes": tags,
+                "tempo": float(tempo),
+                "pitch": 0,  # Default pitch
+                "lyrics": row["Lyrics"] if row["Lyrics"] and row["Lyrics"] != "Lyrics not found" else "",
+                "name": row["Name"] if row["Name"] and row["Name"] != "Title not found" else f"Track {i}",
+                "instruments": []  # Unknown instruments
+            }
+            
+            # Decide if sample goes to train or validation set
+            if i < int(len(rows) * split_ratio):
+                # Copy audio file to train directory
+                output_path = os.path.join(train_dir, "audio", filename)
+                shutil.copy2(audio_path, output_path)
+                train_samples.append(sample)
+            else:
+                # Copy audio file to validation directory
+                output_path = os.path.join(val_dir, "audio", filename)
+                shutil.copy2(audio_path, output_path)
+                val_samples.append(sample)
+        
+        except Exception as e:
+            print(f"Error processing {row.get('Local_File_Path', 'unknown')}: {e}")
+    
+    # Save metadata
+    train_metadata = {"samples": train_samples}
+    val_metadata = {"samples": val_samples}
+    
+    with open(os.path.join(train_dir, "metadata.json"), "w") as f:
+        json.dump(train_metadata, f, indent=2)
+    
+    with open(os.path.join(val_dir, "metadata.json"), "w") as f:
+        json.dump(val_metadata, f, indent=2)
+    
+    print(f"Prepared {len(train_samples)} training samples and {len(val_samples)} validation samples")
+    return train_dir, val_dir
 
 def prepare_dataset(audio_dir, output_dir, split_ratio=0.9):
     """Prepare dataset from raw audio files"""
@@ -678,6 +798,10 @@ class MusicDataset(Dataset):
         if not os.path.exists(audio_path):
             return False
         
+        # Check if sample has a prompt
+        if not sample.get("prompt"):
+            return False
+        
         return True
     
     def __len__(self):
@@ -688,7 +812,22 @@ class MusicDataset(Dataset):
         
         # Load audio
         audio_path = os.path.join(self.data_dir, "audio", sample["audio_file"])
-        audio, sr = librosa.load(audio_path, sr=self.config.sample_rate)
+        try:
+            audio, sr = librosa.load(audio_path, sr=self.config.sample_rate)
+        except Exception as e:
+            print(f"Error loading {audio_path}: {e}")
+            # Return a dummy sample
+            return {
+                "input_ids": torch.zeros(1, dtype=torch.long),
+                "attention_mask": torch.zeros(1, dtype=torch.long),
+                "audio_values": torch.zeros(1, 1),
+                "prompt": "",
+                "style_themes": [],
+                "instruments": [],
+                "tempo": 120,
+                "pitch": 0,
+                "duration": 10
+            }
         
         # Get prompt
         prompt = sample.get("prompt", "")
@@ -708,31 +847,57 @@ class MusicDataset(Dataset):
         # Get duration
         duration = sample.get("duration", 30)
         
+        # Trim audio if too long
+        max_samples = int(self.config.max_duration * sr)
+        if len(audio) > max_samples:
+            audio = audio[:max_samples]
+        
         # Process audio with MusicGen processor
-        inputs = self.processor(
-            text=[prompt],
-            audio=audio,
-            sampling_rate=sr,
-            padding=True,
-            return_tensors="pt"
-        )
-        
-        # Extract features
-        input_ids = inputs["input_ids"][0]
-        attention_mask = inputs["attention_mask"][0]
-        audio_values = inputs.get("audio_values", torch.zeros(1, 1, 1))[0]
-        
-        return {
-            "input_ids": input_ids,
-            "attention_mask": attention_mask,
-            "audio_values": audio_values,
-            "prompt": prompt,
-            "style_themes": style_themes,
-            "instruments": instruments,
-            "tempo": tempo,
-            "pitch": pitch,
-            "duration": duration
-        }
+        try:
+            inputs = self.processor(
+                text=[prompt],
+                padding=True,
+                return_tensors="pt"
+            )
+            
+            # Process audio separately
+            audio_inputs = self.processor(
+                audio=audio,
+                sampling_rate=sr,
+                return_tensors="pt"
+            )
+            
+            # Extract features
+            input_ids = inputs["input_ids"][0]
+            attention_mask = inputs["attention_mask"][0]
+            audio_values = audio_inputs.get("input_values", torch.zeros(1, 1))[0]
+            
+            return {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+                "audio_values": audio_values,
+                "prompt": prompt,
+                "style_themes": style_themes,
+                "instruments": instruments,
+                "tempo": tempo,
+                "pitch": pitch,
+                "duration": duration
+            }
+        except Exception as e:
+            print(f"Error processing {audio_path}: {e}")
+            # Return a dummy sample
+            return {
+                "input_ids": torch.zeros(1, dtype=torch.long),
+                "attention_mask": torch.zeros(1, dtype=torch.long),
+                "audio_values": torch.zeros(1, 1),
+                "prompt": "",
+                "style_themes": [],
+                "instruments": [],
+                "tempo": 120,
+                "pitch": 0,
+                "duration": 10
+            }
+
     
     def collate_fn(self, batch):
         """Collate function for DataLoader"""
@@ -1137,3 +1302,10 @@ integrate_with_previous_models(
 
 if __name__ == "__main__":
     main()
+    parser = argparse.ArgumentParser(description="Convert CSV dataset to MusicGen format")
+    parser.add_argument("--csv_file", type=str, required=True, help="Input CSV file")
+    parser.add_argument("--output_dir", type=str, default="data/music", help="Output directory")
+    parser.add_argument("--split_ratio", type=float, default=0.9, help="Train/val split ratio")
+    
+    args = parser.parse_args()
+    convert_csv_to_musicgen_dataset(args.csv_file, args.output_dir, args.split_ratio)

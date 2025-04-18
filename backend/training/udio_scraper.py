@@ -1,328 +1,320 @@
-'''import requests
-from lxml import html
-import re
-
-url = "https://www.udio.com/songs/cnuS9UPwsmiz84SKaGrqcX"
-response = requests.get(url)
-tree = html.fromstring(response.content)
-
-# Extract name (likely in <h1> or title area)
-name_elements = tree.xpath('//h1/text()')
-name = name_elements[0].strip() if name_elements else "Title not found"
-
-# Extract prompt (description area)
-prompt = tree.xpath('//div[contains(@class, "description") or contains(@class, "prompt")]/text()')[0].strip()
-
-# Extract lyrics (from lyrics section)
-lyrics = tree.xpath('//div[contains(@class, "lyrics")]//text()')[0].strip()
-
-# Extract tags (from tags section)
-tags = [tag.strip() for tag in tree.xpath('//div[contains(@class, "tags")]//span/text()')]
-
-# Extract MP4 URL (check <video> or <audio> tags)
-mp4_url = None
-video_source = tree.xpath('//video/source/@src | //audio/source/@src')
-if video_source and (video_source[0].endswith('.mp4') or video_source[0].endswith('.mp3')):
-    mp4_url = video_source[0]
-else:
-    # Fallback: Search for .mp4 or .mp3 links in the HTML
-    mp4_match = re.search(r'(https?://[^\s]+?\.(mp4|mp3))', response.text)
-    mp4_url = mp4_match.group(0) if mp4_match else None
-
-# Print results
-print(f"Name: {name}")
-print(f"Prompt: {prompt}")
-print(f"Lyrics: {lyrics}")
-print(f"Tags: {tags}")
-print(f"MP4 URL: {mp4_url}")'''
-
-
-'''
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-import time
-import re
-
-# Set up Selenium with Chrome
-chrome_options = Options()
-chrome_options.add_argument("--headless")  # Run in background (remove for visible browser)
-driver = webdriver.Chrome(options=chrome_options)
-
-# Open the webpage
-url = "https://www.udio.com/songs/cnuS9UPwsmiz84SKaGrqcX"
-driver.get(url)
-time.sleep(3)  # Initial wait for page load
-
-# Extract name (working)
-try:
-    name = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, '//h1[contains(@class, "truncate-2-lines")]'))
-    ).text
-except:
-    name = "Title not found"
-
-# Extract prompt (refined to target description)
-try:
-    prompt = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, '//span[contains(@class, "text-sm") and contains(text(), "Prompt:")]'))
-    ).text.strip().replace("Prompt: ", "")
-except:
-    prompt = "Prompt not found"
-
-# Extract tags (updated with class="text-[13px]")
-try:
-    tags_elements = WebDriverWait(driver, 10).until(
-        EC.presence_of_all_elements_located((By.XPATH, '//div[contains(@class, "w-full")]//a[contains(@class, "text-nowrap")]//span[contains(@class, "text-[13px]")]'))
-    )
-    tags = [tag.text.strip() for tag in tags_elements if tag.text.strip()]
-except:
-    tags = []
-
-# Click the "Lyrics" button to open the drawer
-try:
-    lyrics = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, '//pre[contains(@class, "whitespace-pre-wrap")]'))
-    ).text.strip()
-except:
-    lyrics = "Lyrics not found"
-
-
-# Extract MP4 URL (working)
-mp4_url = "MP4 URL not found"
-page_source = driver.page_source
-mp4_match = re.search(r'(https?://[^\s]+?\.(mp4|mp3))', page_source)
-if mp4_match:
-    mp4_url = mp4_match.group(0)
-
-# Close the browser
-driver.quit()
-
-# Print results
-print(f"Name: {name}")
-print(f"Prompt: {prompt}")
-print(f"Lyrics: {lyrics}")
-print(f"Tags: {tags}")
-print(f"MP4 URL: {mp4_url}")'''
-
-
-
-
-
-'''import os
-import requests
-import re
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-
-# Set up headless Chrome
-chrome_options = Options()
-chrome_options.add_argument("--headless")  # Remove for visible window
-driver = webdriver.Chrome(options=chrome_options)
-
-# Your target URL
-url = "https://www.udio.com/songs/cnuS9UPwsmiz84SKaGrqcX"
-driver.get(url)
-
-# Title
-try:
-    name = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, '//h1[contains(@class, "truncate-2-lines")]'))
-    ).text
-except:
-    name = "Title not found"
-
-# Prompt
-try:
-    prompt = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, '//span[contains(@class, "hidden text-sm md:block")]'))
-    ).text.strip()
-except:
-    prompt = "Prompt not found"
-
-# Tags
-try:
-    tags_elements = WebDriverWait(driver, 10).until(
-        EC.presence_of_all_elements_located((By.XPATH, '//a[contains(@class, "text-nowrap")]//span'))
-    )
-    tags = [tag.text.strip() for tag in tags_elements if tag.text.strip()]
-except:
-    tags = []
-
-# Lyrics
-try:
-    lyrics = WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, '//pre[contains(@class, "whitespace-pre-wrap")]'))
-    ).text.strip()
-except:
-    lyrics = "Lyrics not found"
-
-# MP4 URL extraction from page source
-mp4_url = "MP4 URL not found"
-page_source = driver.page_source
-mp4_match = re.search(r'(https?://[^\s]+?\.(mp4|mp3))', page_source)
-if mp4_match:
-    mp4_url = mp4_match.group(0)
-
-driver.quit()  # Close browser
-
-# Create download folder if not exists
-download_dir = r"D:\Data\mp4_downloads"
-os.makedirs(download_dir, exist_ok=True)
-
-# Download the MP4
-if "http" in mp4_url:
-    try:
-        mp4_response = requests.get(mp4_url)
-        filename = f"{name}.mp4".replace(" ", "_").replace("/", "_")
-        filepath = os.path.join(download_dir, filename)
-        with open(filepath, "wb") as f:
-            f.write(mp4_response.content)
-        print(f"✅ MP4 downloaded to: {filepath}")
-    except Exception as e:
-        print(f"❌ Error downloading MP4: {e}")
-else:
-    print("❌ No valid MP4 URL found.")
-
-# Print info
-print(f"\n🎵 Name: {name}")
-print(f"📝 Prompt: {prompt}")
-print(f"🎶 Lyrics: {lyrics[:100]}...")  # Truncated for preview
-print(f"🏷️ Tags: {tags}")
-print(f"🔗 MP4 URL: {mp4_url}")
-
-
-
-'''
-
-
-
 import os
 import csv
 import requests
 import re
 import time
+import random
+from urllib.parse import urlparse, urljoin
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import TimeoutException, NoSuchElementException, StaleElementReferenceException
+from datetime import datetime
 
 # Configuration
-DOWNLOAD_DIR = r"D:\Data\mp4_downloads"
-CSV_FILE = "udio_songs.csv"
-MAX_SONGS = 10  # ⬅️ Only collect 10 songs for testing
+DOWNLOAD_DIR = r"C:\Users\Khwaish\.vscode\BeatIt\backend\training\training_data\musicgen"
+CSV_FILE = f"udio_songs_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+MAX_SONGS = 100  # Stop after downloading 100 songs
+BASE_URL = "https://www.udio.com"
+SEED_URLS = [
+    "https://www.udio.com/home",
+    "https://www.udio.com/tags/music",
+    "https://www.udio.com/tags/pop",
+    "https://www.udio.com/tags/rock",
+    "https://www.udio.com/tags/rap",
+    "https://www.udio.com/tags/electronic",
+    "https://www.udio.com/trending"
+]
+MAX_PAGES_PER_SECTION = 3  # Maximum pages to crawl in each section
+SCROLL_PAUSE_TIME = 2  # Time to pause between scrolls
 
-# Setup headless Chrome
-options = Options()
-options.add_argument("--headless")  # Comment this out to see the browser
-driver = webdriver.Chrome(options=options)
-
-# Open trending page
-driver.get("https://www.udio.com/home")
-WebDriverWait(driver, 10).until(
-    EC.presence_of_element_located((By.XPATH, '//a[contains(@href, "/songs/")]'))
-)
-
-
-# Scroll and collect song links
-print("🔍 Scrolling to collect song links...")
-song_links = set()
-last_height = driver.execute_script("return document.body.scrollHeight")
-
-while len(song_links) < MAX_SONGS:
-    links = driver.find_elements(By.XPATH, '//a[contains(@href, "/songs/")]')
-    for link in links:
-        href = link.get_attribute("href")
-        if href and "/songs/" in href:
-            song_links.add(href)
-
-    driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
-    time.sleep(2)
-    new_height = driver.execute_script("return document.body.scrollHeight")
-    if new_height == last_height:
-        break
-    last_height = new_height
-
-print(f"✅ Collected {len(song_links)} song links.\n")
-
-# Create CSV and output folder
+# Ensure the download directory exists
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
-with open(CSV_FILE, "w", newline="", encoding="utf-8") as csvfile:
-    writer = csv.writer(csvfile)
-    writer.writerow(["Name", "Prompt", "Lyrics", "Tags", "MP4_URL"])
 
-    for index, song_url in enumerate(list(song_links)[:MAX_SONGS]):
-        print(f"🎵 ({index+1}/{MAX_SONGS}) Scraping: {song_url}")
+def setup_driver():
+    """Set up and return a configured Chrome WebDriver"""
+    options = Options()
+    options.add_argument("--headless")  # Remove this line if you want to see the browser
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+    
+    driver = webdriver.Chrome(options=options)
+    return driver
+
+def is_valid_url(url):
+    """Check if URL is valid and belongs to the target website"""
+    if not url or not isinstance(url, str):
+        return False
+    
+    parsed = urlparse(url)
+    return bool(parsed.netloc) and "udio.com" in parsed.netloc and parsed.scheme in ["http", "https"]
+
+def scroll_page(driver, max_scrolls=5):
+    """Scroll down the page to load more content"""
+    scrolls = 0
+    last_height = driver.execute_script("return document.body.scrollHeight")
+    
+    while scrolls < max_scrolls:
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(SCROLL_PAUSE_TIME)
+        new_height = driver.execute_script("return document.body.scrollHeight")
+        
+        if new_height == last_height:
+            break
+        
+        last_height = new_height
+        scrolls += 1
+
+def get_all_links(driver):
+    """Extract all links from the current page"""
+    links = set()
+    try:
+        elements = driver.find_elements(By.TAG_NAME, 'a')
+        for element in elements:
+            try:
+                href = element.get_attribute("href")
+                if href and is_valid_url(href):
+                    links.add(href)
+            except StaleElementReferenceException:
+                continue
+    except Exception as e:
+        print(f"Error extracting links: {e}")
+    
+    return links
+
+def filter_song_links(links):
+    """Filter links to keep only song URLs"""
+    return {link for link in links if "/songs/" in link}
+
+def filter_navigation_links(links):
+    """Filter links to keep only navigation URLs (not song URLs)"""
+    nav_links = set()
+    for link in links:
+        # Skip song links
+        if "/songs/" in link:
+            continue
+        
+        # Keep only links to sections we're interested in
+        if any(section in link for section in ["/home", "/tags/", "/trending", "/discover", "/artists/"]):
+            nav_links.add(link)
+    
+    return nav_links
+
+def download_song(mp4_url, filepath):
+    """Download a song from the given URL to the specified filepath"""
+    try:
+        mp4_data = requests.get(mp4_url, timeout=30)
+        with open(filepath, "wb") as f:
+            f.write(mp4_data.content)
+        return True
+    except Exception as e:
+        print(f"Error downloading MP4: {e}")
+        return False
+
+def extract_song_details(driver, song_url):
+    """Extract song details from a song page"""
+    details = {
+        "name": "Title not found",
+        "prompt": "Prompt not found",
+        "lyrics": "Lyrics not found",
+        "tags": [],
+        "mp4_url": None
+    }
+    
+    try:
+        # Get song name
         try:
-            driver.get(song_url)
-            time.sleep(2)
+            name_element = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.XPATH, '//h1[contains(@class, "truncate-2-lines")]'))
+            )
+            details["name"] = name_element.text
+        except (TimeoutException, NoSuchElementException):
+            pass
 
-            # Song name
+        # Get prompt
+        try:
+            prompt_element = driver.find_element(By.XPATH, '//span[contains(@class, "hidden text-sm md:block")]')
+            details["prompt"] = prompt_element.text.strip()
+        except NoSuchElementException:
+            pass
+
+        # Get tags
+        try:
+            tags_elements = driver.find_elements(By.XPATH, '//a[contains(@class, "text-nowrap")]//span')
+            details["tags"] = [t.text.strip() for t in tags_elements if t.text.strip()]
+        except NoSuchElementException:
+            pass
+
+        # Get lyrics
+        try:
+            lyrics_elem = WebDriverWait(driver, 5).until(
+                EC.presence_of_element_located((By.XPATH, '//pre[contains(@class, "whitespace-pre-wrap")]'))
+            )
+            details["lyrics"] = lyrics_elem.text.strip()
+        except (TimeoutException, NoSuchElementException):
+            pass
+
+        # Extract MP4 URL from page source using regex
+        page_source = driver.page_source
+        mp4_match = re.search(r'(https?://[^\s]+?\.(mp4|mp3))', page_source)
+        if mp4_match:
+            details["mp4_url"] = mp4_match.group(0)
+    
+    except Exception as e:
+        print(f"Error extracting song details: {e}")
+    
+    return details
+
+def main():
+    driver = setup_driver()
+    
+    # Sets to keep track of visited URLs and found song links
+    visited_urls = set()
+    song_links = set()
+    urls_to_visit = SEED_URLS.copy()
+    
+    # Create CSV file to record the song details
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as csvfile:
+        writer = csv.writer(csvfile)
+        writer.writerow(["Name", "Prompt", "Lyrics", "Tags", "Local_File_Path"])
+        
+        downloaded_count = 0
+        pages_visited = 0
+        
+        # Continue until we've downloaded enough songs or run out of URLs to visit
+        while urls_to_visit and downloaded_count < MAX_SONGS and pages_visited < len(SEED_URLS) * MAX_PAGES_PER_SECTION:
+            # Get the next URL to visit
+            current_url = urls_to_visit.pop(0)
+            
+            # Skip if we've already visited this URL
+            if current_url in visited_urls:
+                continue
+            
+            print(f"\nVisiting page: {current_url}")
+            visited_urls.add(current_url)
+            pages_visited += 1
+            
             try:
-                name = WebDriverWait(driver, 10).until(
-                    EC.presence_of_element_located((By.XPATH, '//h1[contains(@class, "truncate-2-lines")]'))
-                ).text
-            except:
-                name = "Title not found"
-
-            # Prompt
+                # Navigate to the URL
+                driver.get(current_url)
+                time.sleep(2)  # Wait for page to load
+                
+                # Scroll to load more content
+                scroll_page(driver)
+                
+                # Get all links from the page
+                all_links = get_all_links(driver)
+                
+                # Extract song links
+                new_song_links = filter_song_links(all_links)
+                song_links.update(new_song_links)
+                print(f"Found {len(new_song_links)} new song links on this page. Total: {len(song_links)}")
+                
+                # Extract navigation links for further crawling
+                nav_links = filter_navigation_links(all_links)
+                
+                # Add new navigation links to our queue
+                for link in nav_links:
+                    if link not in visited_urls and link not in urls_to_visit:
+                        urls_to_visit.append(link)
+                
+                # Process song links if we're on a page with songs
+                if "/songs/" in current_url:
+                    # This is a song page, process it directly
+                    details = extract_song_details(driver, current_url)
+                    
+                    if details["mp4_url"]:
+                        # Prepare a safe filename for the song
+                        safe_name = re.sub(r'[\\/*?:"<>|]', "_", details["name"]) + ".mp4"
+                        filepath = os.path.join(DOWNLOAD_DIR, safe_name)
+                        
+                        # Check if the file has already been downloaded
+                        if os.path.exists(filepath):
+                            print(f"File already exists: {filepath}. Skipping download.")
+                        else:
+                            # Download the MP4 file
+                            if download_song(details["mp4_url"], filepath):
+                                print(f"Downloaded: {filepath}")
+                                downloaded_count += 1
+                            else:
+                                print("Failed to download MP4.")
+                                continue
+                        
+                        # Write the collected details to the CSV file
+                        writer.writerow([
+                            details["name"],
+                            details["prompt"],
+                            details["lyrics"],
+                            ", ".join(details["tags"]),
+                            filepath
+                        ])
+                        csvfile.flush()  # Ensure data is written to file
+            
+            except Exception as e:
+                print(f"Error processing page {current_url}: {e}")
+        
+        # Process individual song links if we haven't reached MAX_SONGS yet
+        song_links_list = list(song_links)
+        random.shuffle(song_links_list)  # Randomize to get a diverse set
+        
+        for song_url in song_links_list:
+            # Stop if we've downloaded enough songs
+            if downloaded_count >= MAX_SONGS:
+                break
+            
+            # Skip if we've already visited this URL
+            if song_url in visited_urls:
+                continue
+            
+            print(f"\nProcessing song: {song_url}")
+            visited_urls.add(song_url)
+            
             try:
-                prompt = driver.find_element(By.XPATH, '//span[contains(@class, "hidden text-sm md:block")]').text.strip()
-            except:
-                prompt = "Prompt not found"
+                # Navigate to the song page
+                driver.get(song_url)
+                time.sleep(2)  # Wait for page to load
+                
+                # Extract song details
+                details = extract_song_details(driver, song_url)
+                
+                if details["mp4_url"]:
+                    # Prepare a safe filename for the song
+                    safe_name = re.sub(r'[\\/*?:"<>|]', "_", details["name"]) + ".mp4"
+                    filepath = os.path.join(DOWNLOAD_DIR, safe_name)
+                    
+                    # Check if the file has already been downloaded
+                    if os.path.exists(filepath):
+                        print(f"File already exists: {filepath}. Skipping download.")
+                    else:
+                        # Download the MP4 file
+                        if download_song(details["mp4_url"], filepath):
+                            print(f"Downloaded: {filepath}")
+                            downloaded_count += 1
+                        else:
+                            print("Failed to download MP4.")
+                            continue
+                    
+                    # Write the collected details to the CSV file
+                    writer.writerow([
+                        details["name"],
+                        details["prompt"],
+                        details["lyrics"],
+                        ", ".join(details["tags"]),
+                        filepath
+                    ])
+                    csvfile.flush()  # Ensure data is written to file
+            
+            except Exception as e:
+                print(f"Error processing song {song_url}: {e}")
+    
+    print(f"\nDone! {downloaded_count} songs scraped and saved.")
+    print(f"Visited {len(visited_urls)} unique URLs.")
+    driver.quit()
 
-            # Tags
-            try:
-                tags_elements = driver.find_elements(By.XPATH, '//a[contains(@class, "text-nowrap")]//span')
-                tags = [t.text.strip() for t in tags_elements if t.text.strip()]
-            except:
-                tags = []
-
-            # Lyrics
-            try:
-                lyrics_elem = WebDriverWait(driver, 5).until(
-                    EC.presence_of_element_located((By.XPATH, '//pre[contains(@class, "whitespace-pre-wrap")]'))
-                )
-                lyrics = lyrics_elem.text.strip()
-            except:
-                lyrics = "Lyrics not found"
-
-            # MP4 Link
-            mp4_url = "Not found"
-            page_source = driver.page_source
-            mp4_match = re.search(r'(https?://[^\s]+?\.(mp4|mp3))', page_source)
-            if mp4_match:
-                mp4_url = mp4_match.group(0)
-
-            # Download MP4
-            if "http" in mp4_url:
-                try:
-                    mp4_data = requests.get(mp4_url)
-                    safe_name = re.sub(r'[\\/*?:"<>|]', "_", name)
-                    filename = f"{safe_name}.mp4"
-                    filepath = os.path.join(DOWNLOAD_DIR, filename)
-                    with open(filepath, "wb") as f:
-                        f.write(mp4_data.content)
-                    print(f"✅ Downloaded: {filepath}")
-                except Exception as e:
-                    print(f"❌ Error downloading MP4: {e}")
-            else:
-                print("❌ MP4 URL not found.")
-
-            # Save to CSV
-            writer.writerow([name, prompt, lyrics, ", ".join(tags), mp4_url])
-
-        except Exception as e:
-            print(f"⚠️ Error scraping {song_url}: {e}")
-
-print("\n✅ Done! 10 songs scraped and saved.")
-driver.quit()
-
+if __name__ == "__main__":
+    main()
