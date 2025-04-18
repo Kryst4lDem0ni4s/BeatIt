@@ -244,3 +244,52 @@ async def logout(request: Request):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Logout failed"
         ) from e
+
+@router.post("/user")
+async def user_specific_endpoint(request: Request):
+    try:
+        # Extract token from Authorization header
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials"
+            )
+        
+        id_token = auth_header.split("Bearer ")[1]
+        
+        # Verify the token
+        try:
+            decoded_token = auth.verify_id_token(id_token)
+            uid = decoded_token['uid']
+            
+            # Now you can use uid to:
+            # 1. Fetch user-specific data
+            user_data = db.reference(f"users/{uid}").get()
+            
+            # 2. Assign items to this specific user
+            # 3. Return customized data based on user preferences
+            
+            return {
+                "status": "success",
+                "user_data": user_data,
+                # "customized_content": get_customized_content(uid)
+            }
+            
+        except auth.ExpiredIdTokenError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Token expired"
+            )
+        except auth.InvalidIdTokenError:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token"
+            )
+            
+    except Exception as e:
+        logger.error(f"Error in user-specific endpoint: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to process request"
+        )
