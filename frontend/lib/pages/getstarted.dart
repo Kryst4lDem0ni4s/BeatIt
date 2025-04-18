@@ -1,3 +1,6 @@
+
+import 'package:beat_it_frontend/pages/createaccount.dart';
+import 'package:beat_it_frontend/pages/login.dart';
 import 'package:flutter/material.dart';
 
 void main() => runApp(const MyApp());
@@ -102,7 +105,12 @@ class SplashSignInPage extends StatelessWidget {
                     ),
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
-                  onPressed: () {},
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (context) => LoginScreen()),
+                    );
+                  },
                   child: const Text(
                     'SIGN IN',
                     style: TextStyle(
@@ -143,8 +151,8 @@ class SplashSignInPage extends StatelessWidget {
               const SizedBox(height: 32),
               // Bottom text
               Column(
-                children: const [
-                  Text(
+                children: [
+                  const Text(
                     "DIDN'T HAVE ACCOUNT?",
                     style: TextStyle(
                       color: Colors.white54,
@@ -152,14 +160,23 @@ class SplashSignInPage extends StatelessWidget {
                       letterSpacing: 1.1,
                     ),
                   ),
-                  SizedBox(height: 2),
-                  Text(
-                    "SIGN UP NOW",
-                    style: TextStyle(
-                      color: Color(0xFFFF4CA0),
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                      letterSpacing: 1.1,
+                  const SizedBox(height: 2),
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                            builder: (context) => CreateAccountPage()),
+                      );
+                    },
+                    child: const Text(
+                      "SIGN UP NOW",
+                      style: TextStyle(
+                        color: Color(0xFFFF4CA0),
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                        letterSpacing: 1.1,
+                      ),
                     ),
                   ),
                 ],
@@ -204,8 +221,23 @@ class WaveformPainter extends CustomPainter {
       ..strokeCap = StrokeCap.round;
 
     final heights = [
-      18.0, 32.0, 22.0, 44.0, 30.0, 54.0, 40.0, 62.0, 48.0,
-      62.0, 40.0, 54.0, 30.0, 44.0, 22.0, 32.0, 18.0
+      18.0,
+      32.0,
+      22.0,
+      44.0,
+      30.0,
+      54.0,
+      40.0,
+      62.0,
+      48.0,
+      62.0,
+      40.0,
+      54.0,
+      30.0,
+      44.0,
+      22.0,
+      32.0,
+      18.0
     ];
 
     for (int i = 0; i < heights.length; i++) {
