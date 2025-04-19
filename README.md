@@ -20,18 +20,15 @@ An end-to-end AI-powered music composition system that combines textual descript
 
 ## 🛠 Technical Stack
 ### Backend
-- **Flask** (REST API)
+- **FastAPI** (API)
 - **PYTHON**
 - **Facebook AudioCraft** (Music Generation)
-- **Redis** (Task Queue)
-- **MongoDB** (User Data Storage)
-- **AWS S3** (Audio Storage)
+- **FireStore** (User Data Storage)
 
 ### Frontend
 - Flutter & Dart (Cross-platform App Interface)
-- Waveform Visualizer (Custom Widget using Audio Data)
 - D3-like Visualizations (Handled via Flutter packages for charts/animations)
-- Flutter Test (For widget and unit testing
+- Flutter Test (For widget and unit testing)
 
 ## 🌐 System Architecture
 ```
@@ -66,7 +63,6 @@ An end-to-end AI-powered music composition system that combines textual descript
 ## 🚀 Installation
 ```
 # Clone repo
-git clone https://github.com/yourusername/beat-it.git
 
 # Backend setup
 cd backend
@@ -74,89 +70,20 @@ python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Frontend setup
-cd ../frontend
-npm install
-```
-
-## ⚙ Configuration
-`.env` Template:
-```
-# AudioCraft
-AUDIOCRAFT_MODEL_PATH=models/audiocraft
-NER_MODEL_PATH=models/ner
-
-# AWS
-S3_BUCKET=beat-it-audio
-AWS_ACCESS_KEY=your_key
-AWS_SECRET_KEY=your_secret
-
-# Redis
-REDIS_HOST=localhost
-REDIS_PORT=6379
-```
-
-## 📡 API Documentation
-**Endpoint**  
-`POST /api/v1/generate`
-
-**Sample Request**
-```
-{
-  "generation_type": "instrumental_vocal",
-  "lyrics_source": "custom",
-  "input_type": "both",
-  "prompt": "Arabian Gothic Pop Soul with gamified elements",
-  "reference_audio": "",
-  "custom_lyrics": "Fly through the night...",
-  "duration": 180.5,
-  "instruments": ["oud", "synth", "darbuka"],
-  "tempo": 112,
-  "key": "C# minor",
-  "avoid": {"genres": ["reggaeton"]},
-  "artists": "Beyoncé meets Tool",
-  "vocal_pitch": "Androgynous Alto",
-  "style": "Indo-Western Fusion"
-}
-```
-
-**Response**
-```
-{
-  "status": "processing",
-  "track_id": "BEAT-8932",
-  "queue_position": 5,
-  "webhook_url": "https://api.beat.it/status/BEAT-8932"
-}
-```
-
 ## 👥 Team Roles
-- **Manvendra**  
-  *AI/ML Architect*  
-  Model fine-tuning, feature extraction pipelines
 
-- **Khwaish**  
-  *Backend Engineer*  
-  API development, audio processing workflows
+  **Khwaish**  
+  *Backend Engineer and AI Architect*  
+  AI model development, audio processing pipelines, API development, Planning and Design
+
+- **Manvendra**  
+  *Data Architect*  
+  Data Scientist, feature extraction pipelines
 
 - **Bhavika & Karthikey**  
   *Frontend Team*  
-  User interface, visualization systems
-
-## 📍 Roadmap
-- [ ] Phase 1: Core Generation Engine (Q3 2025)
-- [ ] Phase 2: Collaborative Editing (Q4 2025) 
-- [ ] Phase 3: DAW Integration Plugin (Q1 2026)
-- [ ] Phase 4: Mobile App (Q2 2026)
-
-## 📜 License
-MIT License - See [LICENSE.md](LICENSE.md) for details
-
----
+  User interface, visualization systems, user experience design, integration
 
 **🚨 Important Note**  
 This project uses Facebook's AudioCraft under non-commercial research license. Commercial use requires direct authorization from Meta.
 ```
-
----
-Answer from Perplexity: pplx.ai/share

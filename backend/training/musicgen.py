@@ -16,6 +16,7 @@ from transformers import AutoProcessor, MusicgenForConditionalGeneration, AutoTo
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
+from pydub import AudioSegment
 
 
 class MusicGenConfig:
@@ -42,6 +43,7 @@ class MusicGenConfig:
         self.warmup_steps = 500
         self.gradient_accumulation_steps = 4
         self.fp16 = True
+        self.weight_decay = 0.01  # Add weight decay parameter
         
         # Generation parameters
         self.max_duration = 30  # in seconds
@@ -156,15 +158,43 @@ class MusicDataset(Dataset):
         # Initialize processor
         self.processor = AutoProcessor.from_pretrained(config.model_name)
     
+    def find_file(path, base_dirs=None):
+        """Try multiple path variations to find the file"""
+        if os.path.exists(path):
+            return path
+            
+        # Try with normalized path
+        norm_path = os.path.normpath(path)
+        if os.path.exists(norm_path):
+            return norm_path
+            
+        # Try base directories if provided
+        if base_dirs:
+            for base in base_dirs:
+                test_path = os.path.join(base, os.path.basename(path))
+                if os.path.exists(test_path):
+                    return test_path
+                    
+        return None
+    
     def _is_valid_sample(self, sample):
-        """Check if sample is valid"""
+        """Check if sample is valid with detailed reporting"""
         # Check if audio file exists
         audio_path = os.path.join(self.data_dir, "audio", sample["audio_file"])
         if not os.path.exists(audio_path):
+            print(f"Sample rejected: Audio file not found at {audio_path}")
             return False
         
         # Check if sample has a prompt
         if not sample.get("prompt"):
+            print(f"Sample rejected: Missing prompt for {sample['audio_file']}")
+            return False
+        
+        # Verify audio can be loaded
+        try:
+            audio, sr = librosa.load(audio_path, sr=None, duration=5)  # Just test first 5 seconds
+        except Exception as e:
+            print(f"Sample rejected: Cannot load audio file {audio_path} - {e}")
             return False
         
         return True
@@ -172,13 +202,53 @@ class MusicDataset(Dataset):
     def __len__(self):
         return len(self.samples)
     
+    def _load_audio_safely(self, audio_path):
+        """Safely load audio with multiple fallbacks"""
+        if not os.path.exists(audio_path):
+            print(f"Audio file not found: {audio_path}")
+            return None, None
+            
+        try:
+            # Try librosa first
+            audio, sr = librosa.load(audio_path, sr=self.config.sample_rate)
+            return audio, sr
+        except Exception as e:
+            print(f"Librosa failed: {e}")
+            
+        try:
+            # Try pydub as fallback
+            audio_segment = AudioSegment.from_file(audio_path)
+            audio = np.array(audio_segment.get_array_of_samples()) / 32768.0
+            if audio_segment.channels == 2:
+                audio = audio.reshape((-1, 2)).mean(axis=1)
+            sr = audio_segment.frame_rate
+            return audio, sr
+        except Exception as e:
+            print(f"Pydub failed: {e}")
+            
+        return None, None
+    
     def __getitem__(self, idx):
         sample = self.samples[idx]
         
         # Load audio
         audio_path = os.path.join(self.data_dir, "audio", sample["audio_file"])
         try:
-            audio, sr = librosa.load(audio_path, sr=self.config.sample_rate)
+            # Try loading with librosa first, then pydub as fallback
+            try:
+                audio, sr = librosa.load(audio_path, sr=self.config.sample_rate)
+            except Exception:
+                from pydub import AudioSegment
+                audio_segment = AudioSegment.from_file(audio_path)
+                audio = np.array(audio_segment.get_array_of_samples()) / 32768.0
+                sr = audio_segment.frame_rate
+                if audio_segment.channels == 2:
+                    audio = audio.reshape((-1, 2)).mean(axis=1)
+            try:
+                if audio is None:
+                    audio, sr = self._load_audio_safely(audio_path)
+            except Exception as e:
+                print(f"Error loading {audio_path}: {e}")
         except Exception as e:
             print(f"Error loading {audio_path}: {e}")
             # Return a dummy sample
@@ -232,10 +302,22 @@ class MusicDataset(Dataset):
                 return_tensors="pt"
             )
             
+            MAX_TOKEN_LENGTH = 512
+
+            # Truncate input_ids and attention_mask if they exceed the maximum length
+            if inputs["input_ids"].size(1) > MAX_TOKEN_LENGTH:
+                inputs["input_ids"] = inputs["input_ids"][:, :MAX_TOKEN_LENGTH]
+                inputs["attention_mask"] = inputs["attention_mask"][:, :MAX_TOKEN_LENGTH]
+                print(f"Truncated token sequence from {inputs['input_ids'].size(1)} to {MAX_TOKEN_LENGTH}")
+                
             # Extract features
             input_ids = inputs["input_ids"][0]
             attention_mask = inputs["attention_mask"][0]
+            fixed_length = int(self.config.max_duration * self.config.sample_rate / self.config.hop_length)
             audio_values = audio_inputs.get("input_values", torch.zeros(1, 1))[0]
+            audio_values = audio_values[:fixed_length]  # Truncate if too long
+            if len(audio_values) < fixed_length:  # Pad if too short
+                audio_values = torch.nn.functional.pad(audio_values, (0, fixed_length - len(audio_values)))
             
             return {
                 "input_ids": input_ids,
@@ -264,15 +346,68 @@ class MusicDataset(Dataset):
             }
     
     def collate_fn(self, batch):
-        """Collate function for DataLoader"""
-        # Collect input_ids and attention_mask
-        input_ids = torch.stack([item["input_ids"] for item in batch])
-        attention_mask = torch.stack([item["attention_mask"] for item in batch])
+        """Collate function for DataLoader that handles variable length inputs"""
+        # Filter out any None or invalid samples
+        batch = [item for item in batch if item is not None]
         
-        # Collect audio_values
-        audio_values = torch.stack([item["audio_values"] for item in batch])
+        # Get max sequence length for this batch
+        max_input_len = max([item["input_ids"].size(0) for item in batch])
         
-        # Collect other items
+        # Pad and collect input_ids and attention_mask
+        padded_input_ids = []
+        padded_attention_mask = []
+        
+        for item in batch:
+            # Current lengths
+            input_len = item["input_ids"].size(0)
+            
+            # Pad sequences
+            pad_len = max_input_len - input_len
+            
+            # Pad input_ids with zeros (or the padding token ID if different)
+            padded_input = torch.cat([
+                item["input_ids"],
+                torch.zeros(pad_len, dtype=torch.long)
+            ])
+            
+            # Extend attention mask with zeros (0 = don't attend to this position)
+            padded_mask = torch.cat([
+                item["attention_mask"],
+                torch.zeros(pad_len, dtype=torch.long)
+            ])
+            
+            padded_input_ids.append(padded_input)
+            padded_attention_mask.append(padded_mask)
+        
+        # Stack padded tensors
+        input_ids = torch.stack(padded_input_ids)
+        attention_mask = torch.stack(padded_attention_mask)
+        
+        # Handle audio values similarly if they have variable lengths
+        audio_values_list = [item["audio_values"] for item in batch]
+        
+        # Check if audio values need padding
+        if isinstance(audio_values_list[0], torch.Tensor) and len(set(x.size(0) for x in audio_values_list)) > 1:
+            max_audio_len = max([x.size(0) for x in audio_values_list])
+            padded_audio_values = []
+            
+            for audio in audio_values_list:
+                audio_len = audio.size(0)
+                pad_len = max_audio_len - audio_len
+                
+                padded_audio = torch.cat([
+                    audio,
+                    torch.zeros(pad_len, dtype=audio.dtype)
+                ])
+                
+                padded_audio_values.append(padded_audio)
+            
+            audio_values = torch.stack(padded_audio_values)
+        else:
+            # If all same length or not tensors, stack directly
+            audio_values = torch.stack(audio_values_list) if isinstance(audio_values_list[0], torch.Tensor) else audio_values_list
+        
+        # Collect other metadata
         prompts = [item["prompt"] for item in batch]
         style_themes = [item["style_themes"] for item in batch]
         instruments = [item["instruments"] for item in batch]
@@ -299,7 +434,12 @@ class MusicGenerator:
         
         # Initialize the MusicGen model and processor
         self.processor = AutoProcessor.from_pretrained(config.model_name)
-        self.model = MusicgenForConditionalGeneration.from_pretrained(config.model_name)
+        # When initializing the model
+        self.model = MusicgenForConditionalGeneration.from_pretrained(
+            config.model_name,
+            use_cache=False,  # Important for training
+            ignore_mismatched_sizes=True  # Handle size mismatches
+        )
         self.model.to(config.device)
         
         # Initialize style encoder
@@ -312,6 +452,46 @@ class MusicGenerator:
         
         # Create output directory
         os.makedirs(config.output_dir, exist_ok=True)
+        
+    @staticmethod
+    def combine_tracks(vocals_path: str, instrumental_path: str, user_id: str, track_id: str) -> str:
+        """
+        Combines vocal and instrumental audio tracks into a single audio file.
+
+        Args:
+            vocals_path (str): Path to the vocal audio file.
+            instrumental_path (str): Path to the instrumental audio file.
+            user_id (str): User identifier for storage path.
+            track_id (str): Track identifier for storage path.
+
+        Returns:
+            str: Path to the combined audio file.
+        """
+        try:
+            # Load audio files
+            vocals = AudioSegment.from_file(vocals_path)
+            instrumental = AudioSegment.from_file(instrumental_path)
+
+            # Adjust lengths: loop or trim instrumental to match vocals length
+            if len(instrumental) < len(vocals):
+                repeats = len(vocals) // len(instrumental) + 1
+                instrumental = instrumental * repeats
+            instrumental = instrumental[:len(vocals)]
+
+            # Mix vocals and instrumental
+            combined = vocals.overlay(instrumental)
+
+            # Define output path
+            output_dir = f"temp/{user_id}/{track_id}"
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, "combined_track.mp3")
+
+            # Export combined audio
+            combined.export(output_path, format="mp3")
+
+            return output_path
+        except Exception as e:
+            raise RuntimeError(f"Failed to combine tracks: {str(e)}")
     
     def load_checkpoint(self, checkpoint_path):
         """Load model checkpoint"""
@@ -335,10 +515,22 @@ class MusicGenerator:
         """Process audio reference for conditioning"""
         if audio_path is None:
             return None
-        
-        # Load audio file
-        audio, sr = librosa.load(audio_path, sr=sample_rate or self.config.sample_rate)
-        
+        try:
+            # Load audio file
+            audio, sr = librosa.load(audio_path, sr=sample_rate or self.config.sample_rate)
+        except Exception:
+            try:
+                # Try pydub with explicit ffmpeg path
+                from pydub import AudioSegment
+                audio_segment = AudioSegment.from_file(audio_path)
+                # Convert to numpy array
+                audio = np.array(audio_segment.get_array_of_samples()) / 32768.0
+                sr = audio_segment.frame_rate
+            except Exception as e:
+                print(f"Failed to process audio: {e}")
+                return None, None
+            return audio, sr
+    
         # Process with MusicGen processor
         inputs = self.processor(
             audio=audio, 
@@ -539,7 +731,7 @@ class MusicGenerator:
         return output_file
     
     def train(self, train_dataset, val_dataset=None, num_epochs=None, batch_size=None, 
-             learning_rate=None, checkpoint_dir=None, resume_from=None):
+         learning_rate=None, checkpoint_dir=None, resume_from=None):
         """Train the model on the provided dataset"""
         # Set training parameters
         num_epochs = num_epochs or self.config.max_epochs
@@ -552,15 +744,17 @@ class MusicGenerator:
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=4
+            num_workers=4,
+            collate_fn=train_dataset.collate_fn
         )
-        
+
         if val_dataset:
             val_loader = DataLoader(
                 val_dataset,
                 batch_size=batch_size,
                 shuffle=False,
-                num_workers=4
+                num_workers=4,
+                collate_fn=val_dataset.collate_fn
             )
         
         # Set models to training mode
@@ -612,19 +806,39 @@ class MusicGenerator:
                 batch = {k: v.to(self.config.device) if isinstance(v, torch.Tensor) else v 
                         for k, v in batch.items()}
                 
-                # Forward pass
-                outputs = self.model(
-                    input_ids=batch['input_ids'],
-                    attention_mask=batch['attention_mask'],
-                    audio_values=batch.get('audio_values'),
-                    decoder_input_ids=batch.get('decoder_input_ids'),
-                    return_dict=True
-                )
+                # if 'is_valid' in batch and not batch['is_valid']:
+                #     print("Skipping invalid batch")
+                #     continue
                 
-                # Compute loss
+                # Create forward args dictionary with proper parameter names
+                forward_args = {
+                    'input_ids': batch['input_ids'],
+                    'attention_mask': batch['attention_mask'],
+                    'return_dict': True
+                }
+                
+                # Handle audio data properly (key parameter name is input_values, not audio_values)
+                if 'audio_values' in batch and batch['audio_values'] is not None:
+                    # Get audio and ensure it has the right shape (batch_size, channels, length)
+                    audio_values = batch['audio_values']
+                    if len(audio_values.shape) == 2:  # [batch_size, length]
+                        audio_values = audio_values.unsqueeze(1)  # Add channel dimension
+                    
+                    # Use the correct parameter name (input_values not audio_values)
+                    forward_args['input_values'] = audio_values
+                
+                # Forward pass with correct parameter names
+                outputs = self.model(**forward_args)
+                
+                # Check if loss exists before proceeding
+                if not hasattr(outputs, 'loss') or outputs.loss is None:
+                    print("Warning: Model did not return a loss. Skipping batch.")
+                    continue
+                
+                # Get loss
                 loss = outputs.loss
                 
-                # Backward pass
+                # Backward pass (now safe because we checked loss is not None)
                 loss.backward()
                 
                 # Update weights
@@ -632,9 +846,31 @@ class MusicGenerator:
                 scheduler.step()
                 optimizer.zero_grad()
                 
-                # Update progress bar
-                train_loss += loss.item()
-                progress_bar.set_postfix({'loss': train_loss / (progress_bar.n + 1)})
+                labels = batch['input_ids'].clone()
+        
+                # Forward pass with labels
+                outputs = self.model(
+                    input_ids=batch['input_ids'],
+                    attention_mask=batch['attention_mask'],
+                    labels=labels,  # Add labels for loss calculation
+                    return_dict=True
+                )
+                
+                # Check if loss exists
+                if hasattr(outputs, 'loss') and outputs.loss is not None:
+                    loss = outputs.loss
+                    # Backward pass
+                    loss.backward()
+                    # Update weights
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad()
+                    
+                    # Update progress bar
+                    train_loss += loss.item()
+                    progress_bar.set_postfix({'loss': train_loss / (progress_bar.n + 1)})
+                else:
+                    print("Warning: Model did not return a loss. Check model configuration.")
             
             # Validation
             if val_dataset:
@@ -651,14 +887,27 @@ class MusicGenerator:
                         batch = {k: v.to(self.config.device) if isinstance(v, torch.Tensor) else v 
                                 for k, v in batch.items()}
                         
+                        # Check if audio_values exists and is not None
+                        if 'audio_values' not in batch or batch['audio_values'] is None:
+                            print("Skipping batch with missing audio values")
+                            continue
+                            
+                        # Forward pass with proper checks
+                        forward_args = {
+                            'input_ids': batch['input_ids'],
+                            'attention_mask': batch['attention_mask'],
+                            'return_dict': True
+                        }
+                        
+                        # Only add audio values if they exist
+                        if 'audio_values' in batch and batch['audio_values'] is not None:
+                            audio_values = batch['audio_values']
+                            if len(audio_values.shape) == 2:  # [batch_size, length]
+                                audio_values = audio_values.unsqueeze(1)  # Add channel dimension
+                            forward_args['input_values'] = audio_values
+                        
                         # Forward pass
-                        outputs = self.model(
-                            input_ids=batch['input_ids'],
-                            attention_mask=batch['attention_mask'],
-                            audio_values=batch.get('audio_values'),
-                            decoder_input_ids=batch.get('decoder_input_ids'),
-                            return_dict=True
-                        )
+                        outputs = self.model(**forward_args)
                         
                         # Compute loss
                         loss = outputs.loss
@@ -688,7 +937,7 @@ class MusicGenerator:
 
 
 def convert_csv_to_musicgen_dataset(csv_file, output_dir, split_ratio=0.9):
-    """Convert CSV dataset to MusicGen training format"""
+    """Convert CSV dataset to MusicGen training format with robust path handling"""
     # Create output directories
     train_dir = os.path.join(output_dir, "train")
     val_dir = os.path.join(output_dir, "val")
@@ -700,8 +949,8 @@ def convert_csv_to_musicgen_dataset(csv_file, output_dir, split_ratio=0.9):
     ]:
         os.makedirs(directory, exist_ok=True)
     
-    # Read CSV file
-    with open(csv_file, "r", encoding="utf-8") as f:
+    # Read CSV file with proper encoding
+    with open(csv_file, "r", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
     
@@ -710,59 +959,165 @@ def convert_csv_to_musicgen_dataset(csv_file, output_dir, split_ratio=0.9):
     # Process each entry
     train_samples = []
     val_samples = []
+    processed_count = 0
+    skipped_count = 0
     
     for i, row in enumerate(tqdm.tqdm(rows, desc="Processing files")):
         try:
-            # Get file path and check if it exists
-            audio_path = row["Local_File_Path"]
-            if not os.path.exists(audio_path):
-                print(f"Warning: File not found: {audio_path}")
+            # Get file path and check if it exists with robust path resolution
+            audio_path = row.get("Local_File_Path", "")
+            if not audio_path:
+                print(f"Warning: Empty file path for entry {i}")
+                skipped_count += 1
                 continue
+                
+            # Try multiple path resolution strategies
+            original_path = audio_path
+            possible_paths = [
+                audio_path,
+                os.path.normpath(audio_path),
+                os.path.join(os.path.dirname(csv_file), os.path.basename(audio_path)),
+                os.path.abspath(audio_path)
+            ]
+            
+            audio_path = None
+            for path in possible_paths:
+                if os.path.exists(path):
+                    audio_path = path
+                    break
+            
+            if not audio_path:
+                print(f"Warning: Could not find file at any of these locations:")
+                for path in possible_paths:
+                    print(f"  - {path}")
+                skipped_count += 1
+                continue
+            
+            print(f"Processing file: {audio_path}")
             
             # Load audio to get duration and sample rate
-            audio, sr = librosa.load(audio_path, sr=None)
-            duration = librosa.get_duration(y=audio, sr=sr)
+            try:
+                # Try with librosa first
+                audio, sr = librosa.load(audio_path, sr=None)
+                duration = librosa.get_duration(y=audio, sr=sr)
+            except Exception as e:
+                print(f"Librosa failed, trying alternative audio loading for {audio_path}: {e}")
+                
+                # Try with pydub if librosa fails (handles more formats including MP4)
+                try:
+                    from pydub import AudioSegment
+                    audio_segment = AudioSegment.from_file(audio_path)
+                    duration = len(audio_segment) / 1000.0  # Convert ms to seconds
+                    sr = audio_segment.frame_rate
+                    
+                    # Convert to numpy array for further processing
+                    import numpy as np
+                    audio = np.array(audio_segment.get_array_of_samples()) / 32768.0  # Normalize to [-1, 1]
+                    
+                    # If stereo, convert to mono
+                    if audio_segment.channels == 2:
+                        audio = audio.reshape((-1, 2)).mean(axis=1)
+                except Exception as e2:
+                    print(f"Could not load audio file {audio_path} with either method: {e2}")
+                    skipped_count += 1
+                    continue
             
             # Skip if duration is too short or too long
-            if duration < 5 or duration > 180:  # Adjust thresholds as needed
-                print(f"Skipping {audio_path}: duration {duration}s out of range")
+            min_duration = 5  # 5 seconds
+            max_duration = 300  # 5 minutes (increased from 180)
+            
+            if duration < min_duration or duration > max_duration:
+                print(f"Skipping {audio_path}: duration {duration:.2f}s out of range ({min_duration}-{max_duration}s)")
+                skipped_count += 1
                 continue
             
-            # Extract basic audio features
-            tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
+            # Get prompt and clean/truncate if needed
+            prompt = row.get("Prompt", "")
+            if not prompt:
+                # Generate a simple placeholder prompt if none exists
+                prompt = f"Music track in {os.path.basename(audio_path)}"
             
-            # Parse tags into style_themes
-            tags = row.get("Tags", "").split(", ") if row.get("Tags") else []
+            # Truncate very long prompts to avoid token limit issues
+            if len(prompt) > 500:
+                prompt = prompt[:500] + "..."
+                print(f"Truncated long prompt for sample {i}")
+            
+            # Parse lyrics
+            lyrics = row.get("Lyrics", "")
+            if not lyrics:
+                lyrics = ""  # Empty string if no lyrics
+            
+            # Get name/title
+            name = row.get("Name", "")
+            if not name:
+                name = f"Track {i}"
+            
+            # Extract basic audio features
+            try:
+                tempo, _ = librosa.beat.beat_track(y=audio, sr=sr)
+            except Exception:
+                tempo = 120  # Default tempo if detection fails
             
             # Create sample metadata
-            filename = f"{i:06d}.mp3"
+            filename = f"{i:06d}.wav"
             sample = {
                 "audio_file": filename,
                 "original_path": audio_path,
                 "duration": float(duration),
-                "prompt": row.get("Prompt", "") if row.get("Prompt") and row.get("Prompt") != "Prompt not found" else f"A music track with {', '.join(tags) if tags else 'melody'}",
-                "style_themes": tags,
+                "prompt": prompt,
+                "style_themes": [],  # Could parse from prompt if needed
                 "tempo": float(tempo),
                 "pitch": 0,  # Default pitch
-                "lyrics": row.get("Lyrics", "") if row.get("Lyrics") and row.get("Lyrics") != "Lyrics not found" else "",
-                "name": row.get("Name", "") if row.get("Name") and row.get("Name") != "Title not found" else f"Track {i}",
+                "lyrics": lyrics,
+                "name": name,
                 "instruments": []  # Unknown instruments
             }
             
-            # Decide if sample goes to train or validation set
-            if i < int(len(rows) * split_ratio):
-                # Copy audio file to train directory
-                output_path = os.path.join(train_dir, "audio", filename)
-                shutil.copy2(audio_path, output_path)
-                train_samples.append(sample)
-            else:
-                # Copy audio file to validation directory
-                output_path = os.path.join(val_dir, "audio", filename)
-                shutil.copy2(audio_path, output_path)
-                val_samples.append(sample)
+            # Save audio file to appropriate directory
+            output_path = ""
+            try:
+                # Decide if sample goes to train or validation set
+                if i < int(len(rows) * split_ratio):
+                    output_path = os.path.join(train_dir, "audio", filename)
+                    # Convert audio to WAV format
+                    try:
+                        # Use pydub to handle various formats
+                        from pydub import AudioSegment
+                        audio_segment = AudioSegment.from_file(audio_path)
+                        audio_segment.export(output_path, format="wav")
+                    except:
+                        # Fallback to librosa
+                        import soundfile as sf
+                        sf.write(output_path, audio, sr)
+                    
+                    train_samples.append(sample)
+                else:
+                    output_path = os.path.join(val_dir, "audio", filename)
+                    # Convert audio to WAV format
+                    try:
+                        # Use pydub to handle various formats
+                        from pydub import AudioSegment
+                        audio_segment = AudioSegment.from_file(audio_path)
+                        audio_segment.export(output_path, format="wav")
+                    except:
+                        # Fallback to librosa
+                        import soundfile as sf
+                        sf.write(output_path, audio, sr)
+                    
+                    val_samples.append(sample)
+                
+                processed_count += 1
+                print(f"Successfully processed file {i}/{len(rows)}: {name}")
+            
+            except Exception as e:
+                print(f"Error saving audio file to {output_path}: {e}")
+                skipped_count += 1
+                continue
         
         except Exception as e:
-            print(f"Error processing {row.get('Local_File_Path', 'unknown')}: {e}")
+            print(f"Error processing row {i}: {e}")
+            skipped_count += 1
+            continue
     
     # Save metadata
     train_metadata = {"samples": train_samples}
@@ -774,9 +1129,11 @@ def convert_csv_to_musicgen_dataset(csv_file, output_dir, split_ratio=0.9):
     with open(os.path.join(val_dir, "metadata.json"), "w") as f:
         json.dump(val_metadata, f, indent=2)
     
+    print(f"Processed {processed_count} files successfully")
+    print(f"Skipped {skipped_count} files due to errors or constraints")
     print(f"Prepared {len(train_samples)} training samples and {len(val_samples)} validation samples")
+    
     return train_dir, val_dir
-
 
 def prepare_dataset(audio_dir, output_dir, split_ratio=0.9):
     """Prepare dataset from raw audio files"""
@@ -811,7 +1168,7 @@ def prepare_dataset(audio_dir, output_dir, split_ratio=0.9):
             duration = librosa.get_duration(y=audio, sr=sr)
             
             # Skip if duration is too short or too long
-            if duration < 5 or duration > 30:
+            if duration < 5 or duration > 300:
                 continue
             
             # Extract basic audio features for automatic annotation
@@ -888,6 +1245,13 @@ def train_from_csv(csv_file, config, num_epochs=10, batch_size=4, learning_rate=
     train_dataset = MusicDataset(config, split="train")
     val_dataset = MusicDataset(config, split="val")
     
+    # Check dataset sizes
+    if len(train_dataset) == 0:
+        raise ValueError("Training dataset is empty. Please check file paths and processing logs.")
+    
+    print(f"Training dataset contains {len(train_dataset)} samples")
+    print(f"Validation dataset contains {len(val_dataset)} samples")
+    
     print("Creating model...")
     generator = MusicGenerator(config)
     
@@ -902,7 +1266,6 @@ def train_from_csv(csv_file, config, num_epochs=10, batch_size=4, learning_rate=
     )
     
     return generator
-
 
 def interactive_generation(generator):
     """Interactive mode for music generation"""

@@ -1,7 +1,9 @@
 import logging
+from fastapi import security
+from fastapi.security import HTTPAuthorizationCredentials
 import firebase_admin
 from firebase_admin import credentials, auth, db
-from fastapi import FastAPI, HTTPException, status, APIRouter
+from fastapi import Depends, FastAPI, HTTPException, status, APIRouter
 from fastapi import Request
 from backend.models.model_types import LoginRequest
 
@@ -292,4 +294,22 @@ async def user_specific_endpoint(request: Request):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to process request"
+        )
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    try:
+        token = credentials.credentials
+        # Verify the Firebase token
+        decoded_token = auth.verify_id_token(token)
+        # Return user data
+        return {
+            "uid": decoded_token["uid"],
+            "email": decoded_token.get("email"),
+            "name": decoded_token.get("name")
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid authentication credentials: {str(e)}",
+            headers={"WWW-Authenticate": "Bearer"},
         )

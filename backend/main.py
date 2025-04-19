@@ -6,7 +6,7 @@ from firebase_admin import credentials
 import firebase_admin
 import uvicorn
 from config import settings
-from routers import auth
+from routers import auth, generate_music
 from log_base import setup_logger
 
 logger = setup_logger(__name__)
@@ -28,6 +28,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, tags=["Authentication"], prefix="/api/auth")
+app.include_router(auth.router, tags=["Authentication"], prefix="/api/generate-music")
 
 @app.get("/health")
 async def root():
