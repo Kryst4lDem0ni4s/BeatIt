@@ -133,8 +133,7 @@
 //   @override
 //   bool shouldRepaint(CustomPainter oldDelegate) => false;
 // }
-import 'package:beat_it_frontend/pages/getstarted.dart';
-
+import 'package:beat_it/pages/getstarted.dart';
 import 'package:flutter/material.dart';
 import 'package:blobs/blobs.dart';
 import 'dart:math';
@@ -222,7 +221,7 @@ class _SplashScreenState extends State<SplashScreen>
           Future.delayed(const Duration(seconds: 3), () {
             if (mounted) {
               Navigator.of(context).pushReplacement(
-                MaterialPageRoute(builder: (_) => SplashSignInPage()),
+                MaterialPageRoute(builder: (_) => const SplashSignInPage()),
               );
             }
           });
