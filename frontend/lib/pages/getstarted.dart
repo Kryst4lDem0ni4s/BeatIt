@@ -1,6 +1,6 @@
 
-import 'package:beat_it_frontend/pages/createaccount.dart';
-import 'package:beat_it_frontend/pages/login.dart';
+import 'package:beat_it/pages/createaccount.dart';
+import 'package:beat_it/pages/login.dart';
 import 'package:flutter/material.dart';
 
 void main() => runApp(const MyApp());

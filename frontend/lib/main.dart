@@ -1,6 +1,7 @@
 
-import 'package:beat_it_frontend/pages/splash.dart';
-import 'package:beat_it_frontend/pages/themes.dart';
+import 'package:beat_it/pages/splash.dart';
+import 'package:beat_it/pages/themes.dart';
+
 import 'package:flutter/material.dart';
 
 

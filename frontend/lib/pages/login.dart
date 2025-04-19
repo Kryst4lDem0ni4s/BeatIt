@@ -1,5 +1,6 @@
 
-import 'package:beat_it_frontend/pages/createaccount.dart';
+import 'package:beat_it/pages/blob_copy.dart';
+
 import 'package:flutter/material.dart';
 
 class LoginScreen extends StatefulWidget {
