@@ -17,10 +17,25 @@ from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from pydub import AudioSegment
+import torch.nn.functional as F
 
+# Try multiple common FFmpeg locations
+ffmpeg_paths = [
+    "C:/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin/ffmpeg.exe",
+    r"C:\ffmpeg\bin\ffmpeg.exe",
+    r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
+    os.path.join(os.environ.get('USERPROFILE', ''), 'scoop', 'shims', 'ffmpeg.exe'),
+    "/usr/bin/ffmpeg",
+    "/usr/local/bin/ffmpeg"
+]
 
-class MusicGenConfig:
+for path in ffmpeg_paths:
+    if os.path.exists(path):
+        AudioSegment.converter = path
+        print(f"Found FFmpeg at: {path}")
+        break
     
+class MusicGenConfig:
     """python musicgen.py train_csv --csv_file training_data/udio_songs_20250418_132910.csv --data_dir training_data/musicgen --batch_size 4 --learning_rate 1e-5 --epochs 10 --checkpoint_dir checkpoints/musicgen"""
     def __init__(self):
         # Model architecture
@@ -66,7 +81,22 @@ class StyleEncoder(nn.Module):
         self.config = config
         self.tokenizer = AutoTokenizer.from_pretrained(config.text_encoder_model)
         self.encoder = AutoModel.from_pretrained(config.text_encoder_model)
+
+    # original_forward = self.model.forward
+    # self.model.forward = forward_wrapper
+    # def forward_wrapper(*args, **kwargs):
+    #     # Check and fix input_ids shape
+    #     if 'input_ids' in kwargs and kwargs['input_ids'] is not None:
+    #         if kwargs['input_ids'].dim() == 2:
+    #             kwargs['input_ids'] = kwargs['input_ids'].unsqueeze(1)
         
+    #     # Check and fix attention_mask shape
+    #     if 'attention_mask' in kwargs and kwargs['attention_mask'] is not None:
+    #         if kwargs['attention_mask'].dim() == 2:
+    #             kwargs['attention_mask'] = kwargs['attention_mask'].unsqueeze(1)
+        
+    #   return original_forward(*args, **kwargs)
+
     def forward(self, text_list):
         # Tokenize the input texts
         inputs = self.tokenizer(text_list, padding=True, truncation=True, 
@@ -202,31 +232,51 @@ class MusicDataset(Dataset):
     def __len__(self):
         return len(self.samples)
     
-    def _load_audio_safely(self, audio_path):
-        """Safely load audio with multiple fallbacks"""
+    def load_audio_safely(audio_path, sample_rate=44100):
+        """Load audio with multiple fallbacks"""
+        import os
+        import numpy as np
+        
         if not os.path.exists(audio_path):
             print(f"Audio file not found: {audio_path}")
             return None, None
-            
+        
+        # Try with librosa
         try:
-            # Try librosa first
-            audio, sr = librosa.load(audio_path, sr=self.config.sample_rate)
+            import librosa
+            audio, sr = librosa.load(audio_path, sr=sample_rate)
             return audio, sr
         except Exception as e:
             print(f"Librosa failed: {e}")
-            
+        
+        # Try with pydub
         try:
-            # Try pydub as fallback
+            from pydub import AudioSegment
             audio_segment = AudioSegment.from_file(audio_path)
+            # Convert to numpy array
             audio = np.array(audio_segment.get_array_of_samples()) / 32768.0
+            # Convert stereo to mono if needed
             if audio_segment.channels == 2:
                 audio = audio.reshape((-1, 2)).mean(axis=1)
             sr = audio_segment.frame_rate
             return audio, sr
         except Exception as e:
             print(f"Pydub failed: {e}")
-            
+        
+        # Try with scipy as last resort
+        try:
+            from scipy.io import wavfile
+            sr, audio = wavfile.read(audio_path)
+            if audio.dtype == np.int16:
+                audio = audio.astype(np.float32) / 32768.0
+            elif audio.dtype == np.int32:
+                audio = audio.astype(np.float32) / 2147483648.0
+            return audio, sr
+        except Exception as e:
+            print(f"Scipy failed: {e}")
+        
         return None, None
+
     
     def __getitem__(self, idx):
         sample = self.samples[idx]
@@ -436,8 +486,7 @@ class MusicGenerator:
         self.processor = AutoProcessor.from_pretrained(config.model_name)
         # When initializing the model
         self.model = MusicgenForConditionalGeneration.from_pretrained(
-            config.model_name,
-            use_cache=False,  # Important for training
+            pretrained_model_name_or_path=config.model_name,
             ignore_mismatched_sizes=True  # Handle size mismatches
         )
         self.model.to(config.device)
@@ -847,7 +896,15 @@ class MusicGenerator:
                 optimizer.zero_grad()
                 
                 labels = batch['input_ids'].clone()
-        
+                # Check input shape and fix if needed
+                if 'input_ids' in batch and batch['input_ids'].dim() >= 2:
+                    # Add channel dimension if missing
+                    batch['input_ids'] = batch['input_ids'].unsqueeze(1)
+                
+                # Check attention mask shape
+                if 'attention_mask' in batch and batch['attention_mask'].dim() >= 2:
+                    batch['attention_mask'] = batch['attention_mask'].unsqueeze(1)
+            
                 # Forward pass with labels
                 outputs = self.model(
                     input_ids=batch['input_ids'],
@@ -874,10 +931,12 @@ class MusicGenerator:
             
             # Validation
             if val_dataset:
+                self.model.eval()
                 val_loss = 0.0
+                val_batches = 0
                 
                 # Set models to evaluation mode
-                self.model.eval()
+
                 self.style_encoder.eval()
                 self.attributes_encoder.eval()
                 
@@ -887,6 +946,16 @@ class MusicGenerator:
                         batch = {k: v.to(self.config.device) if isinstance(v, torch.Tensor) else v 
                                 for k, v in batch.items()}
                         
+                        # Fix input shapes if needed
+                        if batch['input_ids'].dim() == 2:
+                            batch['input_ids'] = batch['input_ids'].unsqueeze(1)
+                        
+                        if batch['attention_mask'].dim() == 2:
+                            batch['attention_mask'] = batch['attention_mask'].unsqueeze(1)
+                        
+                        # Create labels from input_ids for next token prediction
+                        labels = batch['input_ids'].clone()
+                        
                         # Check if audio_values exists and is not None
                         if 'audio_values' not in batch or batch['audio_values'] is None:
                             print("Skipping batch with missing audio values")
@@ -894,9 +963,11 @@ class MusicGenerator:
                             
                         # Forward pass with proper checks
                         forward_args = {
-                            'input_ids': batch['input_ids'],
-                            'attention_mask': batch['attention_mask'],
-                            'return_dict': True
+                            'input_ids':batch['input_ids'],
+                            'attention_mask':batch['attention_mask'],
+                            'labels':labels,  # Add labels for loss calculation
+                            'input_values':batch.get('audio_values', None),
+                            'return_dict':True
                         }
                         
                         # Only add audio values if they exist
@@ -910,10 +981,34 @@ class MusicGenerator:
                         outputs = self.model(**forward_args)
                         
                         # Compute loss
-                        loss = outputs.loss
+                        loss = outputs.loss if hasattr(outputs, 'loss') else None
+    
+                        # Add this check before accessing loss.item()
+                        if loss is not None:
+                            val_loss += loss.item()
+                        else:
+                            print("Warning: Model did not return a loss. Skipping batch.")
+                        
+                        # Calculate loss manually if model doesn't return it
+                        if hasattr(outputs, 'loss') and outputs.loss is not None:
+                            loss = outputs.loss
+                        elif hasattr(outputs, 'logits'):
+                            # Shift logits and labels for next token prediction
+                            shift_logits = outputs.logits[..., :-1, :].contiguous()
+                            shift_labels = batch['input_ids'][..., 1:].contiguous()
+                            loss = F.cross_entropy(
+                                shift_logits.view(-1, shift_logits.size(-1)),
+                                shift_labels.view(-1),
+                                ignore_index=-100  # Ignore padding tokens
+                            )
+                        else:
+                            loss = None
+                            print("Warning: Unable to calculate loss. Skipping batch.")
+                            continue
                         
                         # Update validation loss
                         val_loss += loss.item()
+                        val_batches += 1
                 
                 val_loss /= len(val_loader)
                 print(f"Validation loss: {val_loss:.4f}")
