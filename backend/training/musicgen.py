@@ -22,6 +22,7 @@ import torch.nn.functional as F
 # Try multiple common FFmpeg locations
 ffmpeg_paths = [
     "C:/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin/ffmpeg.exe",
+    "C:/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg",
     r"C:\ffmpeg\bin\ffmpeg.exe",
     r"C:\Program Files\ffmpeg\bin\ffmpeg.exe",
     os.path.join(os.environ.get('USERPROFILE', ''), 'scoop', 'shims', 'ffmpeg.exe'),
@@ -279,6 +280,32 @@ class MusicDataset(Dataset):
 
     
     def __getitem__(self, idx):
+        def process_inputs(self, text, audio=None):
+            # Process text inputs
+            inputs = self.processor(
+                text=text,
+                padding="max_length",
+                max_length=self.config.max_length,
+                truncation=True,
+                return_tensors="pt"
+            )
+            
+            # Ensure attention mask is not empty
+            if inputs['attention_mask'].sum() == 0:
+                # Create a non-empty attention mask (attend to at least the first token)
+                inputs['attention_mask'][:, 0] = 1
+                
+            # Process audio if available
+            if audio is not None:
+                audio_inputs = self.processor(
+                    audio=audio,
+                    sampling_rate=self.config.sample_rate,
+                    return_tensors="pt"
+                )
+                inputs['input_values'] = audio_inputs.input_values
+                
+            return inputs
+
         sample = self.samples[idx]
         
         # Load audio
@@ -895,16 +922,22 @@ class MusicGenerator:
                 scheduler.step()
                 optimizer.zero_grad()
                 
+                original_forward = self.model.forward
+                
                 labels = batch['input_ids'].clone()
                 # Check input shape and fix if needed
-                if 'input_ids' in batch and batch['input_ids'].dim() >= 2:
-                    # Add channel dimension if missing
-                    batch['input_ids'] = batch['input_ids'].unsqueeze(1)
+                if 'input_ids' in kwargs and kwargs['input_ids'] is not None:
+                    if 'input_ids' in batch and batch['input_ids'].dim() > 2:
+                        # Add channel dimension if missing
+                        batch['input_ids'] = batch['input_ids'].unsqueeze(1)
                 
                 # Check attention mask shape
-                if 'attention_mask' in batch and batch['attention_mask'].dim() >= 2:
-                    batch['attention_mask'] = batch['attention_mask'].unsqueeze(1)
-            
+                if 'attention_mask' in kwargs and kwargs['attention_mask'] is not None:
+                    if 'attention_mask' in batch and batch['attention_mask'].dim() > 2:
+                        batch['attention_mask'] = batch['attention_mask'].unsqueeze(1)
+                        
+                self.model.forward = forward_wrapper(original_forward)
+                
                 # Forward pass with labels
                 outputs = self.model(
                     input_ids=batch['input_ids'],
@@ -1477,6 +1510,7 @@ def interactive_generation(generator):
             instrumental_file = None
         
         # Generate music
+        
         print("\nGenerating music...")
         generator.generate(
             prompt=prompt,
