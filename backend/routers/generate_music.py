@@ -1,51 +1,22 @@
 import os
 import shutil
-from fastapi import APIRouter, Depends, BackgroundTasks, File, Form, HTTPException, UploadFile, status
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile, WebSocket, status
 from typing import Optional, List, Dict, Any, Union
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from auth import get_current_user
 from ..training.lyricsgen import generate_lyrics
 from ..training.vocalgen import generate_vocals
 from ..training.instrumentalgen import InstrumentalGenerator
 from ..training.musicgen import MusicGenerator
 from config import storage_config
+from ..models import model_types
 
 router = APIRouter()
 
-# Request Models
-class StyleReferences(BaseModel):
-    lyrics_references: Optional[List[str]] = None
-    vocals_references: Optional[List[str]] = None
-    music_references: Optional[List[str]] = None
-
-class MusicGenerationRequest(BaseModel):
-    text_prompt: str
-    vocal_settings: Optional[str] = "with vocals"  # "no vocals", "only vocals", "with vocals"
-    vocals_source: Optional[str] = "generate vocals"  # "custom input", "generate vocals"
-    instrumental_source: Optional[str] = "generate track"  # "custom input", "generate track"
-    lyrics_settings: Optional[str] = "generate lyrics"  # "no lyrics", "custom lyrics", "generate lyrics"
-    custom_lyrics: Optional[str] = None
-    style_references: Optional[StyleReferences] = None
-    reference_usage_mode: Optional[str] = "guidance"  # "guidance", "direct usage"
-    pitch: Optional[int] = None
-    tempo: Optional[int] = None
-    styles_themes: Optional[List[str]] = []
-    styles_themes_to_avoid: Optional[List[str]] = []
-    instruments: Optional[List[str]] = []
-    instruments_to_avoid: Optional[List[str]] = []
-
-class MusicGenerationResponse(BaseModel):
-    status: str
-    message: str
-    track_id: str
-    audio_url: str
-    metadata: Dict[str, Any]
-
-@router.post("/generate-music", response_model=MusicGenerationResponse)
+@router.post("/generate-music", response_model=model_types.MusicGenerationResponse)
 async def generate_music(
-    request: MusicGenerationRequest,
+    request: model_types.MusicGenerationRequest,
     current_user: dict = Depends(get_current_user)
 ):
     try:
@@ -140,7 +111,7 @@ async def generate_music(
         # Store metadata in database
         # db.tracks.insert_one({...}) # Uncomment and implement based on your DB
         
-        return MusicGenerationResponse(
+        return model_types.MusicGenerationResponse(
             status="success",
             message="Music generated successfully",
             track_id=track_id,
@@ -156,18 +127,8 @@ async def generate_music(
             detail=f"Failed to generate music: {str(e)}"
         )
 
-# Define valid audio file types and file size limits
-VALID_AUDIO_TYPES = ["vocals", "instrumental", "reference"]
-VALID_AUDIO_EXTENSIONS = [".mp3", ".wav", ".ogg", ".m4a", ".flac"]
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
-
 # Response model
-class AudioUploadResponse(BaseModel):
-    status: str
-    file_id: str
-    file_url: str
-
-@router.post("/upload-audio", response_model=AudioUploadResponse)
+@router.post("/upload-audio", response_model=model_types.AudioUploadResponse)
 async def upload_audio(
     file: UploadFile = File(...),
     type: str = Form(...),
@@ -191,18 +152,18 @@ async def upload_audio(
     user_id = current_user["uid"]
     
     # Validate file type
-    if type not in VALID_AUDIO_TYPES:
+    if type not in model_types.VALID_AUDIO_TYPES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid audio type. Must be one of: {', '.join(VALID_AUDIO_TYPES)}"
+            detail=f"Invalid audio type. Must be one of: {', '.join(model_types.VALID_AUDIO_TYPES)}"
         )
     
     # Check file extension
     file_extension = os.path.splitext(file.filename)[1].lower()
-    if file_extension not in VALID_AUDIO_EXTENSIONS:
+    if file_extension not in model_types.VALID_AUDIO_EXTENSIONS:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid file type. Supported formats: {', '.join(VALID_AUDIO_EXTENSIONS)}"
+            detail=f"Invalid file type. Supported formats: {', '.join(model_types.VALID_AUDIO_EXTENSIONS)}"
         )
     
     try:
@@ -222,10 +183,10 @@ async def upload_audio(
             
             while content:
                 file_size += len(content)
-                if file_size > MAX_FILE_SIZE:
+                if file_size > model_types.MAX_FILE_SIZE:
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"File size exceeds the maximum allowed size of {MAX_FILE_SIZE // (1024 * 1024)} MB"
+                        detail=f"File size exceeds the maximum allowed size of {model_types.MAX_FILE_SIZE // (1024 * 1024)} MB"
                     )
                 buffer.write(content)
                 content = await file.read(1024 * 1024)
@@ -258,7 +219,7 @@ async def upload_audio(
         # Clean up temporary file
         shutil.rmtree(temp_dir, ignore_errors=True)
         
-        return AudioUploadResponse(
+        return model_types.AudioUploadResponse(
             status="success",
             file_id=file_id,
             file_url=file_url
@@ -283,14 +244,7 @@ GENERATION_STATUSES = {
 }
 
 # Response model
-class GenerationStatusResponse(BaseModel):
-    status: str
-    progress: Optional[float] = None
-    estimated_time: Optional[int] = None
-    message: Optional[str] = None
-    details: Optional[Dict[str, Any]] = None
-
-@router.get("/generation-status/{track_id}", response_model=GenerationStatusResponse, 
+@router.get("/generation-status/{track_id}", response_model=model_types.GenerationStatusResponse, 
            status_code=status.HTTP_200_OK)
 async def get_generation_status(
     track_id: str,
@@ -359,7 +313,7 @@ def get_track_info(track_id: str, user_id: str) -> Dict[str, Any]:
         "prompt": "Upbeat summer dance track"
     }
 
-def get_generation_status_from_task_manager(track_id: str) -> GenerationStatusResponse:
+def get_generation_status_from_task_manager(track_id: str) -> model_types.GenerationStatusResponse:
     """
     Get the generation status from your task manager or database.
     
@@ -377,13 +331,13 @@ def get_generation_status_from_task_manager(track_id: str) -> GenerationStatusRe
     status_index = track_id_sum % 4
     
     if status_index == 0:
-        return GenerationStatusResponse(
+        return model_types.GenerationStatusResponse(
             status=GENERATION_STATUSES["QUEUED"],
             message="Your music generation request is in the queue and will be processed soon",
             estimated_time=120  # 2 minutes
         )
     elif status_index == 1:
-        return GenerationStatusResponse(
+        return model_types.GenerationStatusResponse(
             status=GENERATION_STATUSES["PROCESSING"],
             progress=45.0,
             estimated_time=60,  # 1 minute
@@ -395,7 +349,7 @@ def get_generation_status_from_task_manager(track_id: str) -> GenerationStatusRe
             }
         )
     elif status_index == 2:
-        return GenerationStatusResponse(
+        return model_types.GenerationStatusResponse(
             status=GENERATION_STATUSES["COMPLETED"],
             progress=100.0,
             estimated_time=0,
@@ -407,7 +361,7 @@ def get_generation_status_from_task_manager(track_id: str) -> GenerationStatusRe
             }
         )
     else:
-        return GenerationStatusResponse(
+        return model_types.GenerationStatusResponse(
             status=GENERATION_STATUSES["FAILED"],
             message="Music generation failed due to an error",
             details={
@@ -416,36 +370,7 @@ def get_generation_status_from_task_manager(track_id: str) -> GenerationStatusRe
             }
         )
         
-# Define the response models
-class TrackSummary(BaseModel):
-    track_id: str
-    title: Optional[str] = None
-    created_at: datetime
-    status: str
-    audio_url: Optional[str] = None
-    duration: Optional[str] = None
-    prompt: str
-
-class TrackDetail(BaseModel):
-    track_id: str
-    title: Optional[str] = None
-    created_at: datetime
-    status: str
-    audio_url: Optional[str] = None
-    duration: Optional[str] = None
-    prompt: str
-    lyrics: Optional[str] = None
-    vocal_settings: str
-    instrumental_settings: dict
-    styles_themes: List[str]
-    instruments: List[str]
-    metadata: Dict[str, Any]
-    
-class DeleteResponse(BaseModel):
-    status: str
-    message: str
-
-@router.get("/user-tracks", response_model=List[TrackSummary])
+@router.get("/user-tracks", response_model=List[model_types.TrackSummary])
 async def get_user_tracks(
     current_user: dict = Depends(get_current_user)
 ):
@@ -469,7 +394,7 @@ async def get_user_tracks(
             detail=f"Failed to fetch user tracks: {str(e)}"
         )
 
-@router.get("/user-tracks/{track_id}", response_model=TrackDetail)
+@router.get("/user-tracks/{track_id}", response_model=model_types.TrackDetail)
 async def get_track_detail(
     track_id: str,
     current_user: dict = Depends(get_current_user)
@@ -500,7 +425,7 @@ async def get_track_detail(
             detail=f"Failed to fetch track details: {str(e)}"
         )
 
-@router.delete("/user-tracks/{track_id}", response_model=DeleteResponse)
+@router.delete("/user-tracks/{track_id}", response_model=model_types.DeleteResponse)
 async def delete_track(
     track_id: str,
     current_user: dict = Depends(get_current_user)
@@ -523,7 +448,7 @@ async def delete_track(
         # Delete the track from storage and database
         delete_track_from_storage_and_db(track_id, user_id)
         
-        return DeleteResponse(
+        return model_types.DeleteResponse(
             status="success",
             message=f"Track with ID {track_id} has been successfully deleted"
         )
@@ -538,7 +463,7 @@ async def delete_track(
         )
 
 # Database interaction functions
-def get_user_tracks_from_db(user_id: str) -> List[TrackSummary]:
+def get_user_tracks_from_db(user_id: str) -> List[model_types.TrackSummary]:
     """
     Fetch user tracks from the database.
     Replace with actual database query implementation.
@@ -550,7 +475,7 @@ def get_user_tracks_from_db(user_id: str) -> List[TrackSummary]:
     
     # For demonstration purposes only
     return [
-        TrackSummary(
+        model_types.TrackSummary(
             track_id="track1",
             title="Summer Pop Beat",
             created_at=datetime.now(),
@@ -559,7 +484,7 @@ def get_user_tracks_from_db(user_id: str) -> List[TrackSummary]:
             duration="3:45",
             prompt="A summery pop beat with energetic synths"
         ),
-        TrackSummary(
+        model_types.TrackSummary(
             track_id="track2",
             title="Jazz Fusion",
             created_at=datetime.now(),
@@ -570,7 +495,7 @@ def get_user_tracks_from_db(user_id: str) -> List[TrackSummary]:
         )
     ]
 
-def get_track_detail_from_db(track_id: str, user_id: str) -> Optional[TrackDetail]:
+def get_track_detail_from_db(track_id: str, user_id: str) -> Optional[model_types.TrackDetail]:
     """
     Fetch detailed track information from the database.
     Replace with actual database query implementation.
@@ -584,7 +509,7 @@ def get_track_detail_from_db(track_id: str, user_id: str) -> Optional[TrackDetai
     
     # For demonstration purposes only
     if track_id == "track1":
-        return TrackDetail(
+        return model_types.TrackDetail(
             track_id="track1",
             title="Summer Pop Beat",
             created_at=datetime.now(),
@@ -621,37 +546,11 @@ def delete_track_from_storage_and_db(track_id: str, user_id: str):
     # Example with MongoDB:
     # db.tracks.delete_one({"track_id": track_id, "user_id": user_id})
     
-# Define valid file types and extensions
-VALID_FILE_TYPES = ["vocals", "instrumental", "reference", "lyrics"]
-VALID_FILE_PURPOSES = ["direct_use", "inspiration"]
-VALID_AUDIO_EXTENSIONS = [".mp3", ".wav", ".ogg", ".m4a", ".flac"]
-VALID_LYRICS_EXTENSIONS = [".txt", ".md"]
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 # Response models
-class FileUploadResponse(BaseModel):
-    file_id: str
-    file_url: str
-    status: str
-
-class FileMetadata(BaseModel):
-    file_id: str
-    file_name: str
-    file_type: str
-    purpose: str
-    size: int
-    upload_date: datetime
-    file_url: str
-    user_id: str
-    content_type: str
-    duration: Optional[float] = None
-
-class FileDeleteResponse(BaseModel):
-    status: str
-    message: str
 
 # 1.1 File Upload Endpoint
-@router.post("/upload", response_model=FileUploadResponse)
+@router.post("/upload", response_model=model_types.FileUploadResponse)
 async def upload_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -677,31 +576,31 @@ async def upload_file(
         user_id = current_user["uid"]
         
         # Validate file type
-        if file_type not in VALID_FILE_TYPES:
+        if file_type not in model_types.VALID_FILE_TYPES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid file type. Must be one of: {', '.join(VALID_FILE_TYPES)}"
+                detail=f"Invalid file type. Must be one of: {', '.join(model_types.VALID_FILE_TYPES)}"
             )
             
         # Validate purpose
-        if purpose not in VALID_FILE_PURPOSES:
+        if purpose not in model_types.VALID_FILE_PURPOSES:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid purpose. Must be one of: {', '.join(VALID_FILE_PURPOSES)}"
+                detail=f"Invalid purpose. Must be one of: {', '.join(model_types.VALID_FILE_PURPOSES)}"
             )
         
         # Get file extension and validate based on file type
         file_extension = os.path.splitext(file.filename)[1].lower()
         
-        if file_type == "lyrics" and file_extension not in VALID_LYRICS_EXTENSIONS:
+        if file_type == "lyrics" and file_extension not in model_types.VALID_LYRICS_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid lyrics file format. Supported formats: {', '.join(VALID_LYRICS_EXTENSIONS)}"
+                detail=f"Invalid lyrics file format. Supported formats: {', '.join(model_types.VALID_LYRICS_EXTENSIONS)}"
             )
-        elif file_type != "lyrics" and file_extension not in VALID_AUDIO_EXTENSIONS:
+        elif file_type != "lyrics" and file_extension not in model_types.VALID_AUDIO_EXTENSIONS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid audio file format. Supported formats: {', '.join(VALID_AUDIO_EXTENSIONS)}"
+                detail=f"Invalid audio file format. Supported formats: {', '.join(model_types.VALID_AUDIO_EXTENSIONS)}"
             )
         
         # Generate a unique file ID
@@ -720,12 +619,12 @@ async def upload_file(
             
             while content:
                 file_size += len(content)
-                if file_size > MAX_FILE_SIZE:
+                if file_size > model_types.MAX_FILE_SIZE:
                     # Clean up the temp dir if file is too large
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     raise HTTPException(
                         status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"File size exceeds the maximum allowed size of {MAX_FILE_SIZE // (1024 * 1024)} MB"
+                        detail=f"File size exceeds the maximum allowed size of {model_types.MAX_FILE_SIZE // (1024 * 1024)} MB"
                     )
                 buffer.write(content)
                 content = await file.read(1024 * 1024)
@@ -759,7 +658,7 @@ async def upload_file(
         # Schedule temporary directory cleanup as background task
         background_tasks.add_task(shutil.rmtree, temp_dir, ignore_errors=True)
         
-        return FileUploadResponse(
+        return model_types.FileUploadResponse(
             file_id=file_id,
             file_url=file_url,
             status="success"
@@ -776,7 +675,7 @@ async def upload_file(
         )
 
 # 1.2 File Retrieval Endpoint
-@router.get("/files/{file_id}", response_model=FileMetadata)
+@router.get("/files/{file_id}", response_model=model_types.FileMetadata)
 async def get_file(
     file_id: str,
     current_user: dict = Depends(get_current_user)
@@ -805,7 +704,7 @@ async def get_file(
                 detail=f"File with ID {file_id} not found or does not belong to you"
             )
         
-        return FileMetadata(**metadata)
+        return model_types.FileMetadata(**metadata)
         
     except HTTPException:
         raise
@@ -817,7 +716,7 @@ async def get_file(
         )
 
 # 1.3 File Deletion Endpoint
-@router.delete("/files/{file_id}", response_model=FileDeleteResponse)
+@router.delete("/files/{file_id}", response_model=model_types.FileDeleteResponse)
 async def delete_file(
     file_id: str,
     current_user: dict = Depends(get_current_user)
@@ -852,7 +751,7 @@ async def delete_file(
         # Delete the file metadata from database
         # db.files.delete_one({"file_id": file_id, "user_id": user_id})
         
-        return FileDeleteResponse(
+        return model_types.FileDeleteResponse(
             status="success",
             message=f"File with ID {file_id} has been successfully deleted"
         )
@@ -889,40 +788,12 @@ def get_file_metadata_from_db(file_id: str, user_id: str) -> Optional[Dict[str, 
         }
     return None
 
-# Request models
-class StyleReferences(BaseModel):
-    lyrics_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for lyrics references")
-    vocals_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for vocal references")
-    music_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for music references")
-
-class MusicGenerationInitRequest(BaseModel):
-    text_prompt: str = Field(..., description="Textual description of desired music")
-    generation_type: GenTypeEnum = Field("instrumental_vocal", description="Type of generation to perform")
-    vocal_settings: VocalSettingsEnum = Field("with_vocals", description="Options for vocals")
-    vocals_source: VocalsSourceEnum = Field("generate_vocals", description="Source of vocals")
-    instrumental_source: InstrumentalSourceEnum = Field("generate_track", description="Source of instrumental track")
-    lyrics_settings: LyricsSettingsEnum = Field("generate_lyrics", description="Lyrics options")
-    custom_lyrics: Optional[str] = Field(None, description="Text content when custom lyrics are selected")
-    style_references: Optional[StyleReferences] = Field(None, description="Object containing reference files")
-    reference_usage_mode: ReferenceUsageModeEnum = Field("guidance_only", description="Whether references are for guidance only or direct usage")
-    pitch: Optional[str] = Field(None, description="Desired pitch settings (e.g., 'C#')")
-    tempo: Optional[int] = Field(None, description="Desired tempo in BPM (e.g., 120)")
-    styles_themes: List[str] = Field(default=[], description="Array of desired music styles/themes")
-    styles_themes_to_avoid: List[str] = Field(default=[], description="Array of styles/themes to avoid")
-    instruments: List[str] = Field(default=[], description="Array of desired instruments")
-    instruments_to_avoid: List[str] = Field(default=[], description="Array of instruments to avoid")
-
-class MusicGenerationInitResponse(BaseModel):
-    job_id: str
-    status: str
-    estimated_time: int  # in seconds
-
 # In-memory job storage (replace with a database in production)
 jobs_db = {}
 
-@router.post("/generate/init", response_model=MusicGenerationInitResponse)
+@router.post("/generate/init", response_model=model_types.MusicGenerationInitResponse)
 async def init_music_generation(
-    request: MusicGenerationInitRequest,
+    request: model_types.MusicGenerationInitRequest,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
@@ -981,7 +852,7 @@ async def init_music_generation(
             parameters=request.dict()
         )
         
-        return MusicGenerationInitResponse(
+        return model_types.MusicGenerationInitResponse(
             job_id=job_id,
             status="queued",
             estimated_time=int(estimated_time)
@@ -1157,13 +1028,8 @@ async def process_music_generation_job(job_id: str, user_id: str, parameters: di
         jobs_db[job_id]["updated_at"] = datetime.now()
         jobs_db[job_id]["error"] = str(e)
         
-class JobStatusResponse(BaseModel):
-    status: str
-    progress: float
-    estimated_time: Optional[int] = None  # in seconds
-    message: Optional[str] = None
 
-@router.get("/jobs/{job_id}/status", response_model=JobStatusResponse)
+@router.get("/jobs/{job_id}/status", response_model=model_types.JobStatusResponse)
 async def get_job_status(
     job_id: str,
     current_user: dict = Depends(get_current_user)
@@ -1227,7 +1093,7 @@ async def get_job_status(
             message = f"Music generation failed: {job_data.get('error', 'Unknown error')}"
             estimated_time = 0
         
-        return JobStatusResponse(
+        return model_types.JobStatusResponse(
             status=job_status,
             progress=progress,
             estimated_time=estimated_time,
@@ -1243,13 +1109,7 @@ async def get_job_status(
             detail=f"Failed to retrieve job status: {str(e)}"
         )
 
-class GenerationResultResponse(BaseModel):
-    track_url: str
-    track_metadata: Dict[str, Any]
-    waveform_data: List[float]
-    lyrics: Optional[str] = None
-
-@router.get("/jobs/{job_id}/result", response_model=GenerationResultResponse)
+@router.get("/jobs/{job_id}/result", response_model=model_types.GenerationResultResponse)
 async def get_job_result(
     job_id: str,
     current_user: dict = Depends(get_current_user)
@@ -1292,7 +1152,7 @@ async def get_job_result(
             )
         
         # Return the result
-        return GenerationResultResponse(**job_data["result"])
+        return model_types.GenerationResultResponse(**job_data["result"])
         
     except HTTPException:
         raise
@@ -1352,59 +1212,9 @@ def generate_waveform_data(audio_path, num_points=100):
 generation_sessions = {}
 
 # Request/Response models for Step 1
-class Step1Request(BaseModel):
-    text_prompt: str = Field(..., description="Textual description of desired music")
-    vocal_settings: VocalSettingsEnum = Field(..., description="Vocal preferences")
-    lyrics_settings: LyricsSettingsEnum = Field(..., description="Lyrics preferences")
-    custom_lyrics: Optional[str] = Field(None, description="Text content when custom lyrics are selected")
-
-class Step1Response(BaseModel):
-    session_id: str
-    next_step: Dict[str, Any]
-
-# Request/Response models for Step 2
-class StyleReferences(BaseModel):
-    lyrics_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for lyrics references")
-    vocals_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for vocal references") 
-    music_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for music references")
-
-class Step2Request(BaseModel):
-    style_references: StyleReferences
-    reference_usage_mode: ReferenceUsageModeEnum = Field("guidance_only", description="How references should be used")
-
-class StepResponse(BaseModel):
-    session_id: str
-    session_data: Dict[str, Any]
-    next_step: Dict[str, Any]
-
-# Request/Response models for Step 3
-class Step3Request(BaseModel):
-    instruments: List[str] = Field(default=[], description="Desired instruments")
-    instruments_to_avoid: List[str] = Field(default=[], description="Instruments to exclude")
-    styles_themes: List[str] = Field(default=[], description="Desired styles/themes")
-    styles_themes_to_avoid: List[str] = Field(default=[], description="Styles/themes to avoid")
-    pitch: Optional[str] = Field(None, description="Desired pitch (e.g., 'C#')")
-    tempo: Optional[int] = Field(None, description="Desired tempo in BPM (e.g., 120)")
-
-# Request/Response models for Step 4
-class Step4Request(BaseModel):
-    lyrics: Optional[str] = Field(None, description="Modified lyrics")
-    regenerate_lyrics: Optional[bool] = Field(False, description="Request new lyrics generation")
-
-class Step4Response(BaseModel):
-    session_id: str
-    lyrics: str
-    session_data: Dict[str, Any]
-    next_step: Dict[str, Any]
-
-# Response model for Step 5
-class Step5Response(BaseModel):
-    job_id: str
-    status: str
-
-@router.post("/step1", response_model=Step1Response)
+@router.post("/step1", response_model=model_types.Step1Response)
 async def step1_basic_info(
-    request: Step1Request,
+    request: model_types.Step1Request,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -1453,7 +1263,7 @@ async def step1_basic_info(
             "required_fields": ["style_references", "reference_usage_mode"]
         }
         
-        return Step1Response(
+        return model_types.Step1Response(
             session_id=session_id,
             next_step=next_step
         )
@@ -1465,10 +1275,10 @@ async def step1_basic_info(
             detail=f"Failed to process step 1: {str(e)}"
         )
 
-@router.post("/step2/{session_id}", response_model=StepResponse)
+@router.post("/step2/{session_id}", response_model=model_types.StepResponse)
 async def step2_style_references(
     session_id: str,
-    request: Step2Request,
+    request: model_types.Step2Request,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -1518,7 +1328,7 @@ async def step2_style_references(
             "required_fields": ["instruments", "styles_themes", "pitch", "tempo"]
         }
         
-        return StepResponse(
+        return model_types.StepResponse(
             session_id=session_id,
             session_data=session_data,
             next_step=next_step
@@ -1533,10 +1343,10 @@ async def step2_style_references(
             detail=f"Failed to process step 2: {str(e)}"
         )
 
-@router.post("/step3/{session_id}", response_model=StepResponse)
+@router.post("/step3/{session_id}", response_model=model_types.StepResponse)
 async def step3_musical_attributes(
     session_id: str,
-    request: Step3Request,
+    request: model_types.Step3Request,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -1596,7 +1406,7 @@ async def step3_musical_attributes(
                 "required_fields": []
             }
         
-        return StepResponse(
+        return model_types.StepResponse(
             session_id=session_id,
             session_data=session_data,
             next_step=next_step
@@ -1611,10 +1421,10 @@ async def step3_musical_attributes(
             detail=f"Failed to process step 3: {str(e)}"
         )
 
-@router.post("/step4/{session_id}", response_model=Step4Response)
+@router.post("/step4/{session_id}", response_model=model_types.Step4Response)
 async def step4_lyrics_review(
     session_id: str,
-    request: Step4Request,
+    request: model_types.Step4Request,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -1687,7 +1497,7 @@ async def step4_lyrics_review(
             "required_fields": []
         }
         
-        return Step4Response(
+        return model_types.Step4Response(
             session_id=session_id,
             lyrics=lyrics,
             session_data=session_data,
@@ -1703,7 +1513,7 @@ async def step4_lyrics_review(
             detail=f"Failed to process step 4: {str(e)}"
         )
 
-@router.post("/step5/{session_id}/finalize", response_model=Step5Response)
+@router.post("/step5/{session_id}/finalize", response_model=model_types.Step5Response)
 async def step5_finalize(
     session_id: str,
     background_tasks: BackgroundTasks,
@@ -1773,7 +1583,7 @@ async def step5_finalize(
         # Clean up session (optional, can also keep for reference)
         # del generation_sessions[session_id]
         
-        return Step5Response(
+        return model_types.Step5Response(
             job_id=job_id,
             status="queued"
         )
@@ -1819,33 +1629,10 @@ async def start_generation_job(job_params: dict):
 lyrics_db = {}
 
 # Request and Response Models for Lyrics Generation
-class LyricsGenerationRequest(BaseModel):
-    prompt: str = Field(..., description="Text description for lyrics theme")
-    style: str = Field(..., description="Lyrical style (e.g., 'poetic', 'rap')")
-    reference_lyrics: Optional[List[str]] = Field(default=None, description="Optional reference lyrics")
 
-class LyricsGenerationResponse(BaseModel):
-    lyrics_id: str
-    lyrics_text: str
-    status: str
-    created_at: datetime
-    metadata: Dict[str, Any]
-
-# Request and Response Models for Lyrics Modification
-class LyricsModificationRequest(BaseModel):
-    modified_text: str = Field(..., description="Updated lyrics text")
-
-class LyricsModificationResponse(BaseModel):
-    lyrics_id: str
-    lyrics_text: str
-    status: str
-    updated_at: datetime
-    version: int
-    metadata: Dict[str, Any]
-
-@router.post("/generate", response_model=LyricsGenerationResponse)
+@router.post("/generate", response_model=model_types.LyricsGenerationResponse)
 async def generate_lyrics_endpoint(
-    request: LyricsGenerationRequest,
+    request: model_types.LyricsGenerationRequest,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -1906,7 +1693,7 @@ async def generate_lyrics_endpoint(
         
         lyrics_db[lyrics_id] = lyrics_data
         
-        return LyricsGenerationResponse(
+        return model_types.LyricsGenerationResponse(
             lyrics_id=lyrics_id,
             lyrics_text=lyrics_text,
             status="success",
@@ -1923,10 +1710,10 @@ async def generate_lyrics_endpoint(
             detail=f"Failed to process lyrics generation: {str(e)}"
         )
 
-@router.put("/{lyrics_id}/modify", response_model=LyricsModificationResponse)
+@router.put("/{lyrics_id}/modify", response_model=model_types.LyricsModificationResponse)
 async def modify_lyrics(
     lyrics_id: str,
-    request: LyricsModificationRequest,
+    request: model_types.LyricsModificationRequest,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -1969,7 +1756,7 @@ async def modify_lyrics(
         lyrics_data["version"] = new_version
         lyrics_data["metadata"]["modified"] = True
         
-        return LyricsModificationResponse(
+        return model_types.LyricsModificationResponse(
             lyrics_id=lyrics_id,
             lyrics_text=request.modified_text,
             status="success",
@@ -1988,7 +1775,7 @@ async def modify_lyrics(
         )
 
 # Optional: Add a GET endpoint to retrieve lyrics by ID
-@router.get("/{lyrics_id}", response_model=LyricsGenerationResponse)
+@router.get("/{lyrics_id}", response_model=model_types.LyricsGenerationResponse)
 async def get_lyrics(
     lyrics_id: str,
     current_user: dict = Depends(get_current_user)
@@ -2014,7 +1801,7 @@ async def get_lyrics(
                 detail="You do not have permission to access these lyrics"
             )
         
-        return LyricsGenerationResponse(
+        return model_types.LyricsGenerationResponse(
             lyrics_id=lyrics_data["lyrics_id"],
             lyrics_text=lyrics_data["lyrics_text"],
             status="success",
@@ -2035,44 +1822,10 @@ async def get_lyrics(
 vocals_db = {}
 
 # Request and Response Models for Vocals Generation
-class VocalStylePreferences(BaseModel):
-    voice_type: Optional[str] = Field(None, description="Type of voice (e.g., 'male', 'female', 'child')")
-    emotion: Optional[str] = Field(None, description="Emotional tone (e.g., 'cheerful', 'sad', 'angry')")
-    intensity: Optional[float] = Field(None, ge=0.0, le=1.0, description="Intensity of the emotional tone (0.0-1.0)")
-    clarity: Optional[float] = Field(None, ge=0.0, le=1.0, description="Voice clarity parameter (0.0-1.0)")
-    stability: Optional[float] = Field(None, ge=0.0, le=1.0, description="Voice stability parameter (0.0-1.0)")
-    accent: Optional[str] = Field(None, description="Accent preference (e.g., 'american', 'british', 'australian')")
 
-class PitchAdjustments(BaseModel):
-    base_pitch: Optional[str] = Field(None, description="Base pitch setting (e.g., 'C4', 'A3')")
-    pitch_range: Optional[float] = Field(None, ge=0.1, le=2.0, description="Range of pitch variation (0.1-2.0)")
-    contour: Optional[List[str]] = Field(None, description="Pitch contour points (e.g., '(0%,+20Hz) (50%,-10Hz)')")
-
-class VocalsGenerationRequest(BaseModel):
-    lyrics_id: str = Field(..., description="ID of lyrics to vocalize")
-    style: Optional[VocalStylePreferences] = Field(None, description="Vocal style preferences")
-    pitch: Optional[PitchAdjustments] = Field(None, description="Vocal pitch adjustments")
-
-class VocalsGenerationResponse(BaseModel):
-    vocals_id: str
-    vocals_url: Optional[str]
-    status: str
-    estimated_completion_time: Optional[int] = None
-
-# Request and Response Models for Vocals Customization
-class VocalsCustomizationRequest(BaseModel):
-    pitch_adjustment: Optional[PitchAdjustments] = Field(None, description="Changes to vocal pitch")
-    style_adjustment: Optional[VocalStylePreferences] = Field(None, description="Changes to vocal style")
-
-class VocalsCustomizationResponse(BaseModel):
-    vocals_id: str
-    vocals_url: Optional[str]
-    status: str
-    metadata: Dict[str, Any]
-
-@router.post("/generate", response_model=VocalsGenerationResponse)
+@router.post("/generate", response_model=model_types.VocalsGenerationResponse)
 async def generate_vocals_endpoint(
-    request: VocalsGenerationRequest,
+    request: model_types.VocalsGenerationRequest,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
@@ -2127,7 +1880,7 @@ async def generate_vocals_endpoint(
             pitch=request.pitch.dict() if request.pitch else {}
         )
         
-        return VocalsGenerationResponse(
+        return model_types.VocalsGenerationResponse(
             vocals_id=vocals_id,
             vocals_url=None,
             status="processing",
@@ -2143,10 +1896,10 @@ async def generate_vocals_endpoint(
             detail=f"Failed to process vocals generation: {str(e)}"
         )
 
-@router.put("/{vocals_id}/customize", response_model=VocalsCustomizationResponse)
+@router.put("/{vocals_id}/customize", response_model=model_types.VocalsCustomizationResponse)
 async def customize_vocals_endpoint(
     vocals_id: str,
-    request: VocalsCustomizationRequest,
+    request: model_types.VocalsCustomizationRequest,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
@@ -2233,7 +1986,7 @@ async def customize_vocals_endpoint(
             pitch=vocals_data["pitch"]
         )
         
-        return VocalsCustomizationResponse(
+        return model_types.VocalsCustomizationResponse(
             vocals_id=vocals_id,
             vocals_url=None,  # Will be updated when processing completes
             status="processing",
@@ -2335,7 +2088,7 @@ async def process_vocals_customization(vocals_id: str, user_id: str, original_vo
         })
         
         # Call your vocals customization function
-        vocal_track_path = customize_vocals(
+        vocal_track_path = model_types.customize_vocals(
             original_vocals_url=original_vocals_url,
             voice_type=style.get("voice_type"),
             emotion=style.get("emotion"),
@@ -2378,7 +2131,7 @@ async def process_vocals_customization(vocals_id: str, user_id: str, original_vo
         print(f"Error processing vocals customization: {str(e)}")
 
 # Helper function to calculate estimated processing time
-def calculate_estimated_time(lyrics_text: str, style: Optional[VocalStylePreferences], pitch: Optional[PitchAdjustments]) -> int:
+def calculate_estimated_time(lyrics_text: str, style: Optional[model_types.VocalStylePreferences], pitch: Optional[model_types.PitchAdjustments]) -> int:
     """
     Calculate estimated time for vocals generation in seconds.
     """
@@ -2406,7 +2159,7 @@ def calculate_estimated_time(lyrics_text: str, style: Optional[VocalStylePrefere
     return int(base_time * style_multiplier * pitch_multiplier)
 
 # Additional endpoint to get vocals status (optional but recommended)
-@router.get("/{vocals_id}", response_model=VocalsCustomizationResponse)
+@router.get("/{vocals_id}", response_model=model_types.VocalsCustomizationResponse)
 async def get_vocals_status(
     vocals_id: str,
     current_user: dict = Depends(get_current_user)
@@ -2432,7 +2185,7 @@ async def get_vocals_status(
                 detail="You do not have permission to access these vocals"
             )
         
-        return VocalsCustomizationResponse(
+        return model_types.VocalsCustomizationResponse(
             vocals_id=vocals_id,
             vocals_url=vocals_data.get("vocals_url"),
             status=vocals_data["status"],
@@ -2452,44 +2205,10 @@ async def get_vocals_status(
 instrumentals_db = {}
 
 # Request and Response Models for Instrumental Generation
-class StyleReference(BaseModel):
-    file_id: str
-    weight: Optional[float] = Field(1.0, ge=0.0, le=2.0, description="How strongly this reference influences the result (0.0-2.0)")
 
-class InstrumentalGenerationRequest(BaseModel):
-    prompt: str = Field(..., description="Text description of desired instrumental")
-    style_references: Optional[List[StyleReference]] = Field(default=[], description="Reference tracks to influence style")
-    instruments: Optional[List[str]] = Field(default=[], description="Desired instruments to include")
-    tempo: Optional[int] = Field(None, ge=40, le=240, description="Desired tempo in BPM (40-240)")
-    pitch: Optional[str] = Field(None, description="Desired key/pitch (e.g., 'C Major', 'F# Minor')")
-
-class InstrumentalGenerationResponse(BaseModel):
-    instrumental_id: str
-    instrumental_url: Optional[str] = None
-    status: str
-    estimated_completion_time: Optional[int] = None
-    metadata: Dict[str, Any]
-
-# Request and Response Models for Instrumental Customization
-class InstrumentAdjustment(BaseModel):
-    instrument: str
-    volume: Optional[float] = Field(None, ge=0.0, le=2.0, description="Volume adjustment (0.0-2.0)")
-    pan: Optional[float] = Field(None, ge=-1.0, le=1.0, description="Pan adjustment (-1.0 left to 1.0 right)")
-    effects: Optional[Dict[str, float]] = Field(None, description="Effects adjustments (e.g., reverb, delay)")
-
-class InstrumentalCustomizationRequest(BaseModel):
-    instrument_adjustments: Optional[List[InstrumentAdjustment]] = Field(default=[], description="Changes to instrument mix")
-    tempo_adjustment: Optional[int] = Field(None, ge=40, le=240, description="Changes to tempo in BPM (40-240)")
-
-class InstrumentalCustomizationResponse(BaseModel):
-    instrumental_id: str
-    instrumental_url: Optional[str] = None
-    status: str
-    metadata: Dict[str, Any]
-
-@router.post("/generate", response_model=InstrumentalGenerationResponse)
+@router.post("/generate", response_model=model_types.InstrumentalGenerationResponse)
 async def generate_instrumental(
-    request: InstrumentalGenerationRequest,
+    request: model_types.InstrumentalGenerationRequest,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
@@ -2559,7 +2278,7 @@ async def generate_instrumental(
             pitch=request.pitch
         )
         
-        return InstrumentalGenerationResponse(
+        return model_types.InstrumentalGenerationResponse(
             instrumental_id=instrumental_id,
             status="processing",
             estimated_completion_time=estimated_time,
@@ -2573,10 +2292,10 @@ async def generate_instrumental(
             detail=f"Failed to process instrumental generation: {str(e)}"
         )
 
-@router.put("/{instrumental_id}/customize", response_model=InstrumentalCustomizationResponse)
+@router.put("/{instrumental_id}/customize", response_model=model_types.InstrumentalCustomizationResponse)
 async def customize_instrumental(
     instrumental_id: str,
-    request: InstrumentalCustomizationRequest,
+    request: model_types.InstrumentalCustomizationRequest,
     background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
@@ -2657,7 +2376,7 @@ async def customize_instrumental(
             tempo=instrumental_data["tempo"]
         )
         
-        return InstrumentalCustomizationResponse(
+        return model_types.InstrumentalCustomizationResponse(
             instrumental_id=instrumental_id,
             status="processing",
             metadata=instrumental_data["metadata"]
@@ -2756,7 +2475,7 @@ async def process_instrumental_customization(
     instrumental_id: str, 
     user_id: str, 
     original_track_url: str, 
-    instrument_adjustments: List[InstrumentAdjustment], 
+    instrument_adjustments: List[model_types.InstrumentAdjustment], 
     tempo: Optional[int]
 ):
     """
@@ -2819,7 +2538,7 @@ async def process_instrumental_customization(
         print(f"Error processing instrumental customization: {str(e)}")
 
 # Helper function to calculate estimated processing time
-def calculate_estimated_time(request: InstrumentalGenerationRequest) -> int:
+def calculate_estimated_time(request: model_types.InstrumentalGenerationRequest) -> int:
     """
     Calculate estimated time for instrumental generation in seconds.
     """
@@ -2842,7 +2561,7 @@ def calculate_estimated_time(request: InstrumentalGenerationRequest) -> int:
     return base_time
 
 # Optional: Add a GET endpoint to retrieve instrumental status
-@router.get("/{instrumental_id}", response_model=InstrumentalCustomizationResponse)
+@router.get("/{instrumental_id}", response_model=model_types.InstrumentalCustomizationResponse)
 async def get_instrumental_status(
     instrumental_id: str,
     current_user: dict = Depends(get_current_user)
@@ -2868,7 +2587,7 @@ async def get_instrumental_status(
                 detail="You do not have permission to access this instrumental"
             )
         
-        return InstrumentalCustomizationResponse(
+        return model_types.InstrumentalCustomizationResponse(
             instrumental_id=instrumental_id,
             instrumental_url=instrumental_data.get("instrumental_url"),
             status=instrumental_data["status"],
@@ -2885,82 +2604,13 @@ async def get_instrumental_status(
         )
         
 # Define sort and filter options
-class SortField(str, Enum):
-    CREATED_AT = "created_at"
-    TITLE = "title"
-    DURATION = "duration"
-    TYPE = "type"
 
-class SortOrder(str, Enum):
-    ASC = "asc"
-    DESC = "desc"
-
-class AudioFormat(str, Enum):
-    MP3 = "mp3"
-    WAV = "wav"
-    FLAC = "flac"
-    OGG = "ogg"
-
-# Response models
-class PaginationInfo(BaseModel):
-    total_items: int
-    items_per_page: int
-    current_page: int
-    total_pages: int
-    has_next: bool
-    has_prev: bool
-
-class GenerationParameters(BaseModel):
-    prompt: str
-    vocal_settings: str
-    lyrics_settings: str
-    instruments: List[str] = []
-    styles_themes: List[str] = []
-    tempo: Optional[int] = None
-    pitch: Optional[str] = None
-
-class TrackComponent(BaseModel):
-    component_type: str  # "vocals", "instrumental", "lyrics"
-    url: str
-    format: str
-
-class TrackSummary(BaseModel):
-    track_id: str
-    title: str
-    created_at: datetime
-    type: str  # "instrumental", "vocal", "full_track"
-    duration: Optional[float] = None
-    audio_url: str
-    thumbnail_url: Optional[str] = None
-
-class TracksListResponse(BaseModel):
-    tracks: List[TrackSummary]
-    pagination: PaginationInfo
-
-class TrackDetail(BaseModel):
-    track_id: str
-    title: str
-    created_at: datetime
-    updated_at: datetime
-    type: str
-    duration: Optional[float] = None
-    audio_url: str
-    waveform_data: List[float]
-    thumbnail_url: Optional[str] = None
-    generation_parameters: GenerationParameters
-    components: List[TrackComponent]
-    metadata: Dict[str, Any]
-
-class DeleteResponse(BaseModel):
-    status: str
-    message: str
-
-@router.get("", response_model=TracksListResponse)
+@router.get("", response_model=model_types.TracksListResponse)
 async def list_user_tracks(
     page: int = Query(1, ge=1, description="Page number"),
     limit: int = Query(10, ge=1, le=50, description="Items per page"),
-    sort_by: SortField = Query(SortField.CREATED_AT, description="Field to sort by"),
-    sort_order: SortOrder = Query(SortOrder.DESC, description="Sort direction"),
+    sort_by: model_types.SortField = Query(model_types.SortField.CREATED_AT, description="Field to sort by"),
+    sort_order: model_types.SortOrder = Query(model_types.SortOrder.DESC, description="Sort direction"),
     filter: Optional[str] = Query(None, description="Filter criteria (format: field:operator:value,...)"),
     current_user: dict = Depends(get_current_user)
 ):
@@ -3003,7 +2653,7 @@ async def list_user_tracks(
         has_prev = page > 1
         
         # Create pagination info
-        pagination = PaginationInfo(
+        pagination = model_types.PaginationInfo(
             total_items=total_items,
             items_per_page=limit,
             current_page=page,
@@ -3014,7 +2664,7 @@ async def list_user_tracks(
         
         # Simulate tracks (in real implementation, these would come from the database)
         tracks = [
-            TrackSummary(
+            model_types.TrackSummary(
                 track_id=f"track-{i}",
                 title=f"Summer Beat {i}",
                 created_at=datetime.now(),
@@ -3026,7 +2676,7 @@ async def list_user_tracks(
             for i in range(1, 6)  # Simulate 5 tracks per page
         ]
         
-        return TracksListResponse(tracks=tracks, pagination=pagination)
+        return model_types.TracksListResponse(tracks=tracks, pagination=pagination)
         
     except Exception as e:
         print(f"Error listing user tracks: {str(e)}")
@@ -3035,7 +2685,7 @@ async def list_user_tracks(
             detail=f"Failed to list tracks: {str(e)}"
         )
 
-@router.get("/{track_id}", response_model=TrackDetail)
+@router.get("/{track_id}", response_model=model_types.TrackDetail)
 async def get_track_detail(
     track_id: str,
     current_user: dict = Depends(get_current_user)
@@ -3057,7 +2707,7 @@ async def get_track_detail(
             )
         
         # Simulated track detail
-        track_detail = TrackDetail(
+        track_detail = model_types.TrackDetail(
             track_id=track_id,
             title="Summer Beat",
             created_at=datetime.now(),
@@ -3067,7 +2717,7 @@ async def get_track_detail(
             audio_url=f"https://storage.example.com/users/{user_id}/tracks/{track_id}.mp3",
             waveform_data=[0.1, 0.3, 0.5, 0.8, 0.9, 0.7, 0.4, 0.2, 0.1, 0.3, 0.5, 0.8, 0.9, 0.7, 0.4, 0.2],
             thumbnail_url=f"https://storage.example.com/users/{user_id}/tracks/{track_id}-thumbnail.jpg",
-            generation_parameters=GenerationParameters(
+            generation_parameters=model_types.GenerationParameters(
                 prompt="Create an upbeat summer dance track with tropical vibes",
                 vocal_settings="with_vocals",
                 lyrics_settings="generate_lyrics",
@@ -3077,17 +2727,17 @@ async def get_track_detail(
                 pitch="C Major"
             ),
             components=[
-                TrackComponent(
+                model_types.TrackComponent(
                     component_type="vocals",
                     url=f"https://storage.example.com/users/{user_id}/tracks/{track_id}/vocals.mp3",
                     format="mp3"
                 ),
-                TrackComponent(
+                model_types.TrackComponent(
                     component_type="instrumental",
                     url=f"https://storage.example.com/users/{user_id}/tracks/{track_id}/instrumental.mp3",
                     format="mp3"
                 ),
-                TrackComponent(
+                model_types.TrackComponent(
                     component_type="lyrics",
                     url=f"https://storage.example.com/users/{user_id}/tracks/{track_id}/lyrics.txt",
                     format="txt"
@@ -3113,7 +2763,7 @@ async def get_track_detail(
             detail=f"Failed to retrieve track details: {str(e)}"
         )
 
-@router.delete("/{track_id}", response_model=DeleteResponse)
+@router.delete("/{track_id}", response_model=model_types.DeleteResponse)
 async def delete_track(
     track_id: str,
     current_user: dict = Depends(get_current_user)
@@ -3136,7 +2786,7 @@ async def delete_track(
         # storage_config.delete_folder(f"users/{user_id}/tracks/{track_id}")
         # db.tracks.delete_one({"track_id": track_id, "user_id": user_id})
         
-        return DeleteResponse(
+        return model_types.DeleteResponse(
             status="success",
             message=f"Track with ID {track_id} has been successfully deleted"
         )
@@ -3153,7 +2803,7 @@ async def delete_track(
 @router.get("/{track_id}/download")
 async def download_track(
     track_id: str,
-    format: AudioFormat = Query(AudioFormat.MP3, description="Desired file format"),
+    format: model_types.AudioFormat = Query(model_types.AudioFormat.MP3, description="Desired file format"),
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -3202,3 +2852,356 @@ async def download_track(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to download track: {str(e)}"
         )
+        
+        
+@router.get("/models")
+async def get_available_models(current_user: dict = Depends(get_current_user)):
+    """
+    Get information about available ML models for music generation.
+    """
+    models = [
+        {
+            "id": "musicgen",
+            "name": "MusicGen",
+            "provider": "Meta",
+            "description": "Text-to-music model that generates high-quality music from text descriptions",
+            "capabilities": ["text_to_music", "melody_continuation"],
+            "specialties": ["diverse_genres", "high_fidelity_output"],
+            "max_duration": 30,  # in seconds
+            "supported_formats": ["mp3", "wav"]
+        },
+        {
+            "id": "musiclm",
+            "name": "MusicLM",
+            "provider": "Google",
+            "description": "Model that creates music based on textual descriptions",
+            "capabilities": ["text_to_music"],
+            "specialties": ["long_form_generation", "style_consistency"],
+            "max_duration": 60,  # in seconds
+            "supported_formats": ["mp3", "wav"]
+        },
+        {
+            "id": "suno",
+            "name": "Suno AI",
+            "provider": "Suno",
+            "description": "Comprehensive music generation tool with vocals and lyrics",
+            "capabilities": ["text_to_music", "lyric_generation", "vocal_synthesis"],
+            "specialties": ["complete_song_creation", "high_quality_vocals"],
+            "max_duration": 180,  # in seconds
+            "supported_formats": ["mp3", "wav", "stems"]
+        },
+        {
+            "id": "stable_audio",
+            "name": "Stable Audio 2.0",
+            "provider": "Stability AI",
+            "description": "Advanced audio generation with extensive customization",
+            "capabilities": ["text_to_music", "audio_to_audio", "style_transfer"],
+            "specialties": ["sound_effects", "long_form_generation", "high_fidelity"],
+            "max_duration": 180,  # in seconds
+            "supported_formats": ["mp3", "wav", "flac"]
+        }
+    ]
+    
+    return models
+
+@router.get("/instruments")
+async def get_instrument_options(current_user: dict = Depends(get_current_user)):
+    """
+    Get list of supported instruments for music generation.
+    """
+    instruments = {
+        "strings": [
+            {"id": "violin", "name": "Violin", "family": "strings", "range": "high"},
+            {"id": "viola", "name": "Viola", "family": "strings", "range": "mid-high"},
+            {"id": "cello", "name": "Cello", "family": "strings", "range": "mid-low"},
+            {"id": "double_bass", "name": "Double Bass", "family": "strings", "range": "low"},
+            {"id": "acoustic_guitar", "name": "Acoustic Guitar", "family": "strings", "range": "mid"},
+            {"id": "electric_guitar", "name": "Electric Guitar", "family": "strings", "range": "mid"},
+            {"id": "bass_guitar", "name": "Bass Guitar", "family": "strings", "range": "low"},
+            {"id": "harp", "name": "Harp", "family": "strings", "range": "wide"}
+        ],
+        "woodwinds": [
+            {"id": "flute", "name": "Flute", "family": "woodwinds", "range": "high"},
+            {"id": "clarinet", "name": "Clarinet", "family": "woodwinds", "range": "mid-high"},
+            {"id": "oboe", "name": "Oboe", "family": "woodwinds", "range": "mid-high"},
+            {"id": "bassoon", "name": "Bassoon", "family": "woodwinds", "range": "low"},
+            {"id": "saxophone", "name": "Saxophone", "family": "woodwinds", "range": "mid"}
+        ],
+        "brass": [
+            {"id": "trumpet", "name": "Trumpet", "family": "brass", "range": "high"},
+            {"id": "trombone", "name": "Trombone", "family": "brass", "range": "mid-low"},
+            {"id": "french_horn", "name": "French Horn", "family": "brass", "range": "mid"},
+            {"id": "tuba", "name": "Tuba", "family": "brass", "range": "low"}
+        ],
+        "percussion": [
+            {"id": "drums", "name": "Drum Kit", "family": "percussion", "range": "varied"},
+            {"id": "timpani", "name": "Timpani", "family": "percussion", "range": "low"},
+            {"id": "xylophone", "name": "Xylophone", "family": "percussion", "range": "high"},
+            {"id": "marimba", "name": "Marimba", "family": "percussion", "range": "mid"},
+            {"id": "cymbals", "name": "Cymbals", "family": "percussion", "range": "high"}
+        ],
+        "keyboards": [
+            {"id": "piano", "name": "Piano", "family": "keyboards", "range": "wide"},
+            {"id": "organ", "name": "Organ", "family": "keyboards", "range": "wide"},
+            {"id": "harpsichord", "name": "Harpsichord", "family": "keyboards", "range": "mid-high"},
+            {"id": "synthesizer", "name": "Synthesizer", "family": "keyboards", "range": "wide"}
+        ],
+        "electronic": [
+            {"id": "synth_lead", "name": "Synth Lead", "family": "electronic", "range": "high"},
+            {"id": "synth_pad", "name": "Synth Pad", "family": "electronic", "range": "mid"},
+            {"id": "synth_bass", "name": "Synth Bass", "family": "electronic", "range": "low"},
+            {"id": "drum_machine", "name": "Drum Machine", "family": "electronic", "range": "varied"},
+            {"id": "sampler", "name": "Sampler", "family": "electronic", "range": "varied"}
+        ]
+    }
+    
+    return instruments
+
+@router.get("/styles")
+async def get_style_options(current_user: dict = Depends(get_current_user)):
+    """
+    Get list of supported musical styles and themes.
+    """
+    styles = {
+        "genres": [
+            {"id": "rock", "name": "Rock", "description": "Guitar-driven music with strong beats and often bold lyrics"},
+            {"id": "pop", "name": "Pop", "description": "Contemporary mainstream music with catchy melodies"},
+            {"id": "jazz", "name": "Jazz", "description": "Complex harmonies with improvisation and syncopated rhythms"},
+            {"id": "classical", "name": "Classical", "description": "Traditional Western music from the 18th-19th century"},
+            {"id": "electronic", "name": "Electronic", "description": "Music produced with electronic instruments and technology"},
+            {"id": "hip_hop", "name": "Hip Hop", "description": "Rhythmic music with rapping and beats"},
+            {"id": "r_and_b", "name": "R&B", "description": "Rhythm and blues with soulful singing and grooves"},
+            {"id": "country", "name": "Country", "description": "Music with roots in Southern US folk music"},
+            {"id": "folk", "name": "Folk", "description": "Traditional music passed through generations"},
+            {"id": "metal", "name": "Metal", "description": "Heavy and aggressive rock music"}
+        ],
+        "sub_genres": [
+            {"id": "indie_rock", "name": "Indie Rock", "parent": "rock", "description": "Rock music produced independently from commercial record labels"},
+            {"id": "hard_rock", "name": "Hard Rock", "parent": "rock", "description": "Aggressive rock with heavy guitars and drums"},
+            {"id": "synth_pop", "name": "Synth Pop", "parent": "pop", "description": "Pop music with prominent synthesizer sounds"},
+            {"id": "baroque", "name": "Baroque", "parent": "classical", "description": "Classical music from 1600-1750 with ornate structures"},
+            {"id": "techno", "name": "Techno", "parent": "electronic", "description": "Electronic dance music with regular beats and synthetic sounds"}
+        ],
+        "moods": [
+            {"id": "happy", "name": "Happy", "description": "Uplifting and joyful"},
+            {"id": "sad", "name": "Sad", "description": "Somber and melancholic"},
+            {"id": "energetic", "name": "Energetic", "description": "High energy and lively"},
+            {"id": "relaxed", "name": "Relaxed", "description": "Calm and peaceful"},
+            {"id": "aggressive", "name": "Aggressive", "description": "Intense and forceful"},
+            {"id": "romantic", "name": "Romantic", "description": "Passionate and tender"}
+        ],
+        "eras": [
+            {"id": "50s", "name": "1950s", "description": "Early rock and roll, doo-wop"},
+            {"id": "60s", "name": "1960s", "description": "British invasion, psychedelic rock, Motown"},
+            {"id": "70s", "name": "1970s", "description": "Disco, progressive rock, punk"},
+            {"id": "80s", "name": "1980s", "description": "New wave, synth-pop, early hip hop"},
+            {"id": "90s", "name": "1990s", "description": "Grunge, boy bands, gangsta rap"},
+            {"id": "2000s", "name": "2000s", "description": "Nu-metal, emo, crunk"}
+        ],
+        "themes": [
+            {"id": "nature", "name": "Nature", "description": "Inspired by natural environments and phenomena"},
+            {"id": "urban", "name": "Urban", "description": "City life and metropolitan themes"},
+            {"id": "space", "name": "Space", "description": "Cosmic and outer space themes"},
+            {"id": "fantasy", "name": "Fantasy", "description": "Mythical and magical themes"},
+            {"id": "futuristic", "name": "Futuristic", "description": "Forward-looking technological themes"},
+            {"id": "retro", "name": "Retro", "description": "Nostalgic throwbacks to earlier styles"}
+        ]
+    }
+    
+    return styles
+
+class ConnectionManager:
+    def __init__(self):
+        # Store active connections by job_id
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+        # Store connection to user mapping for authentication
+        self.connection_user_map: Dict[WebSocket, str] = {}
+    
+    async def connect(self, websocket: WebSocket, job_id: str, user_id: str):
+        await websocket.accept()
+        
+        if job_id not in self.active_connections:
+            self.active_connections[job_id] = []
+        
+        self.active_connections[job_id].append(websocket)
+        self.connection_user_map[websocket] = user_id
+        
+        await websocket.send_json({
+            "event": "connected",
+            "job_id": job_id,
+            "message": "Connected to generation progress updates"
+        })
+    
+    # async def process_music_generation_job(job_id: str, user_id: str, parameters: dict):
+    #     try:
+    #         # Update job status to processing and send WebSocket update
+    #         await update_job_status(job_id, "processing", 5, "Starting generation")
+    #         await send_generation_update(job_id, "processing", 5, "Starting generation")
+            
+    #         # Process lyrics
+    #         await update_job_status(job_id, "processing", 20, "Generating lyrics")
+    #         await send_generation_update(job_id, "processing", 20, "Generating lyrics")
+    #         lyrics = generate_lyrics(parameters["prompt"])
+            
+    #         # Process vocals
+    #         await update_job_status(job_id, "processing", 40, "Generating vocals")
+    #         await send_generation_update(job_id, "processing", 40, "Generating vocals")
+    #         vocal_track = generate_vocals(lyrics)
+            
+    #         # Process instrumental
+    #         await update_job_status(job_id, "processing", 70, "Generating instrumental")
+    #         await send_generation_update(job_id, "processing", 70, "Generating instrumental")
+    #         instrumental_track = generate_instrumental(parameters)
+            
+    #         # Final processing
+    #         await update_job_status(job_id, "processing", 90, "Finalizing track")
+    #         await send_generation_update(job_id, "processing", 90, "Finalizing track")
+    #         final_track = combine_tracks(vocal_track, instrumental_track)
+            
+    #         # Complete
+    #         await update_job_status(job_id, "completed", 100, "Generation complete")
+    #         await send_generation_update(job_id, "completed", 100, "Generation complete")
+            
+    #     except Exception as e:
+    #         await update_job_status(job_id, "failed", 0, f"Error: {str(e)}")
+    #         await send_generation_update(job_id, "failed", 0, f"Error: {str(e)}")
+
+    
+    async def disconnect(self, websocket: WebSocket, job_id: str):
+        if job_id in self.active_connections and websocket in self.active_connections[job_id]:
+            self.active_connections[job_id].remove(websocket)
+            
+            if len(self.active_connections[job_id]) == 0:
+                del self.active_connections[job_id]
+        
+        if websocket in self.connection_user_map:
+            del self.connection_user_map[websocket]
+    
+    async def send_personal_message(self, message: dict, websocket: WebSocket):
+        await websocket.send_json(message)
+    
+    async def broadcast(self, message: dict, job_id: str):
+        if job_id in self.active_connections:
+            disconnected_websockets = []
+            
+            for websocket in self.active_connections[job_id]:
+                try:
+                    await websocket.send_json(message)
+                except Exception:
+                    disconnected_websockets.append(websocket)
+            
+            for websocket in disconnected_websockets:
+                await self.disconnect(websocket, job_id)
+
+# Create a connection manager instance
+connection_manager = ConnectionManager()
+
+async def get_token_from_query(query_string: str) -> Optional[str]:
+    """Extract token from query string"""
+    params = query_string.split('&')
+    for param in params:
+        if param.startswith('token='):
+            return param[6:]  # Remove 'token=' prefix
+    return None
+
+# Create WebSocket router
+ws_router = APIRouter(tags=["WebSockets"])
+
+@ws_router.websocket("/generation/{job_id}")
+async def websocket_generation_progress(
+    websocket: WebSocket,
+    job_id: str
+):
+    """
+    WebSocket endpoint for real-time generation progress updates.
+    
+    This endpoint provides updates on:
+    - Progress percentage
+    - Status changes
+    - Completion notification
+    """
+    try:
+        # Extract token from query parameters
+        token = await get_token_from_query(websocket.query_string.decode())
+        
+        if not token:
+            await websocket.close(code=1008, reason="Missing authentication token")
+            return
+        
+        try:
+            # Verify token and get user info
+            from firebase_admin import auth
+            decoded_token = auth.verify_id_token(token)
+            user_id = decoded_token["uid"]
+        except Exception as e:
+            await websocket.close(code=1008, reason="Invalid authentication token")
+            return
+        
+        # Check if job exists and belongs to user
+        from ..models import Job
+        job = await Job.get_by_id(job_id)
+        
+        if not job:
+            await websocket.close(code=1003, reason="Job not found")
+            return
+            
+        if job.user_id != user_id:
+            await websocket.close(code=1003, reason="You don't have permission to access this job")
+            return
+        
+        # Accept the connection
+        await connection_manager.connect(websocket, job_id, user_id)
+        
+        # Send initial job status
+        await connection_manager.send_personal_message(
+            {
+                "event": "status_update",
+                "job_id": job_id,
+                "status": job.status,
+                "progress": job.progress,
+                "message": job.message,
+                "timestamp": datetime.now().isoformat()
+            },
+            websocket
+        )
+        
+        # Keep connection open until client disconnects
+        try:
+            while True:
+                data = await websocket.receive_text()
+                # Acknowledge client message
+                await connection_manager.send_personal_message(
+                    {
+                        "event": "acknowledged",
+                        "timestamp": datetime.now().isoformat()
+                    },
+                    websocket
+                )
+        except model_types.WebSocketDisconnect:
+            await connection_manager.disconnect(websocket, job_id)
+    
+    except Exception as e:
+        print(f"WebSocket error: {str(e)}")
+        try:
+            await websocket.close(code=1011, reason="Server error")
+        except:
+            pass
+
+# Utility function to be called from background tasks to send updates
+async def send_generation_update(job_id: str, status: str, progress: float, message: str):
+    """
+    Send a real-time update about generation progress.
+    
+    This function should be called from background tasks processing the generation.
+    """
+    await connection_manager.broadcast(
+        {
+            "event": "progress_update",
+            "job_id": job_id,
+            "status": status,
+            "progress": progress,
+            "message": message,
+            "timestamp": datetime.now().isoformat()
+        },
+        job_id
+    )

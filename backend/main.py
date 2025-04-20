@@ -39,3 +39,18 @@ if __name__ == "__main__":
     uvicorn.run(
         "app.main:app", host="127.0.0.1", port=8000, log_level="info", reload=True
     )
+    
+# from fastapi import FastAPI
+# from routers.options import router as options_router
+# from routers.websockets import ws_router
+
+# app = FastAPI()
+
+# # Include the options router
+# app.include_router(options_router)
+
+# # Include the WebSocket router
+# app.include_router(ws_router, prefix="/ws")
+    
+# In your music generation background task
+# 
