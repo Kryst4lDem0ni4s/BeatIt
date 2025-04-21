@@ -806,16 +806,284 @@ class MusicGenerator:
         
         return output_file
     
+    # def train(self, train_dataset, val_dataset=None, num_epochs=None, batch_size=None, 
+    #      learning_rate=None, checkpoint_dir=None, resume_from=None):
+    #     """Train the model on the provided dataset"""
+    #     # Set training parameters
+    #     num_epochs = num_epochs or self.config.max_epochs
+    #     batch_size = batch_size or self.config.batch_size
+    #     learning_rate = learning_rate or self.config.learning_rate
+    #     checkpoint_dir = checkpoint_dir or self.config.checkpoint_dir
+        
+    #     # Create data loaders
+    #     train_loader = DataLoader(
+    #         train_dataset,
+    #         batch_size=batch_size,
+    #         shuffle=True,
+    #         num_workers=4,
+    #         collate_fn=train_dataset.collate_fn
+    #     )
+
+    #     if val_dataset:
+    #         val_loader = DataLoader(
+    #             val_dataset,
+    #             batch_size=batch_size,
+    #             shuffle=False,
+    #             num_workers=4,
+    #             collate_fn=val_dataset.collate_fn
+    #         )
+        
+    #     # Set models to training mode
+    #     self.model.train()
+    #     self.style_encoder.train()
+    #     self.attributes_encoder.train()
+        
+    #     # Create optimizer
+    #     optimizer = AdamW([
+    #         {'params': self.model.parameters()},
+    #         {'params': self.style_encoder.parameters()},
+    #         {'params': self.attributes_encoder.parameters()}
+    #     ], lr=learning_rate, weight_decay=self.config.weight_decay)
+        
+    #     # Create learning rate scheduler
+    #     scheduler = CosineAnnealingLR(
+    #         optimizer,
+    #         T_max=num_epochs * len(train_loader),
+    #         eta_min=learning_rate / 10
+    #     )
+        
+    #     # Resume from checkpoint if provided
+    #     start_epoch = 0
+    #     if resume_from:
+    #         checkpoint = torch.load(resume_from, map_location=self.config.device)
+    #         self.model.load_state_dict(checkpoint['model'])
+    #         self.style_encoder.load_state_dict(checkpoint['style_encoder'])
+    #         self.attributes_encoder.load_state_dict(checkpoint['attributes_encoder'])
+    #         if 'optimizer' in checkpoint:
+    #             optimizer.load_state_dict(checkpoint['optimizer'])
+    #         if 'scheduler' in checkpoint:
+    #             scheduler.load_state_dict(checkpoint['scheduler'])
+    #         if 'epoch' in checkpoint:
+    #             start_epoch = checkpoint['epoch'] + 1
+    #         print(f"Resumed from epoch {start_epoch}")
+        
+    #     # Create checkpoint directory
+    #     os.makedirs(checkpoint_dir, exist_ok=True)
+        
+    #     # Training loop
+    #     for epoch in range(start_epoch, num_epochs):
+    #         train_loss = 0.0
+            
+    #         # Progress bar for training
+    #         progress_bar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
+            
+    #         for batch in progress_bar:
+    #             # Move batch to device
+    #             batch = {k: v.to(self.config.device) if isinstance(v, torch.Tensor) else v 
+    #                     for k, v in batch.items()}
+                
+    #             # if 'is_valid' in batch and not batch['is_valid']:
+    #             #     print("Skipping invalid batch")
+    #             #     continue
+                
+    #             # Create forward args dictionary with proper parameter names
+    #             forward_args = {
+    #                 'input_ids': batch['input_ids'],
+    #                 'attention_mask': batch['attention_mask'],
+    #                 'return_dict': True
+    #             }
+                
+    #             # Handle audio data properly (key parameter name is input_values, not audio_values)
+    #             if 'audio_values' in batch and batch['audio_values'] is not None:
+    #                 # Get audio and ensure it has the right shape (batch_size, channels, length)
+    #                 audio_values = batch['audio_values']
+    #                 if len(audio_values.shape) == 2:  # [batch_size, length]
+    #                     audio_values = audio_values.unsqueeze(1)  # Add channel dimension
+                    
+    #                 # Use the correct parameter name (input_values not audio_values)
+    #                 forward_args['input_values'] = audio_values
+                
+    #             # Forward pass with correct parameter names
+    #             outputs = self.model(**forward_args)
+                
+    #             # Check if loss exists before proceeding
+    #             if not hasattr(outputs, 'loss') or outputs.loss is None:
+    #                 print("Warning: Model did not return a loss. Skipping batch.")
+    #                 continue
+                
+    #             # Get loss
+    #             loss = outputs.loss
+                
+    #             # Backward pass (now safe because we checked loss is not None)
+    #             loss.backward()
+                
+    #             # Update weights
+    #             optimizer.step()
+    #             scheduler.step()
+    #             optimizer.zero_grad()
+                
+    #             original_forward = self.model.forward
+                
+    #             labels = batch['input_ids'].clone()
+    #             # Check input shape and fix if needed
+    #             if 'input_ids' in kwargs and kwargs['input_ids'] is not None:
+    #                 if 'input_ids' in batch and batch['input_ids'].dim() > 2:
+    #                     # Add channel dimension if missing
+    #                     batch['input_ids'] = batch['input_ids'].unsqueeze(1)
+                
+    #             # Check attention mask shape
+    #             if 'attention_mask' in kwargs and kwargs['attention_mask'] is not None:
+    #                 if 'attention_mask' in batch and batch['attention_mask'].dim() > 2:
+    #                     batch['attention_mask'] = batch['attention_mask'].unsqueeze(1)
+                        
+    #             self.model.forward = forward_wrapper(original_forward)
+                
+    #             # Forward pass with labels
+    #             outputs = self.model(
+    #                 input_ids=batch['input_ids'],
+    #                 attention_mask=batch['attention_mask'],
+    #                 labels=labels,  # Add labels for loss calculation
+    #                 return_dict=True
+    #             )
+                
+    #             # Check if loss exists
+    #             if hasattr(outputs, 'loss') and outputs.loss is not None:
+    #                 loss = outputs.loss
+    #                 # Backward pass
+    #                 loss.backward()
+    #                 # Update weights
+    #                 optimizer.step()
+    #                 scheduler.step()
+    #                 optimizer.zero_grad()
+                    
+    #                 # Update progress bar
+    #                 train_loss += loss.item()
+    #                 progress_bar.set_postfix({'loss': train_loss / (progress_bar.n + 1)})
+    #             else:
+    #                 print("Warning: Model did not return a loss. Check model configuration.")
+            
+    #         # Validation
+    #         if val_dataset:
+    #             self.model.eval()
+    #             val_loss = 0.0
+    #             val_batches = 0
+                
+    #             # Set models to evaluation mode
+
+    #             self.style_encoder.eval()
+    #             self.attributes_encoder.eval()
+                
+    #             with torch.no_grad():
+    #                 for batch in tqdm.tqdm(val_loader, desc="Validation"):
+    #                     # Move batch to device
+    #                     batch = {k: v.to(self.config.device) if isinstance(v, torch.Tensor) else v 
+    #                             for k, v in batch.items()}
+                        
+    #                     # Fix input shapes if needed
+    #                     if batch['input_ids'].dim() == 2:
+    #                         batch['input_ids'] = batch['input_ids'].unsqueeze(1)
+                        
+    #                     if batch['attention_mask'].dim() == 2:
+    #                         batch['attention_mask'] = batch['attention_mask'].unsqueeze(1)
+                        
+    #                     # Create labels from input_ids for next token prediction
+    #                     labels = batch['input_ids'].clone()
+                        
+    #                     # Check if audio_values exists and is not None
+    #                     if 'audio_values' not in batch or batch['audio_values'] is None:
+    #                         print("Skipping batch with missing audio values")
+    #                         continue
+                            
+    #                     # Forward pass with proper checks
+    #                     forward_args = {
+    #                         'input_ids':batch['input_ids'],
+    #                         'attention_mask':batch['attention_mask'],
+    #                         'labels':labels,  # Add labels for loss calculation
+    #                         'input_values':batch.get('audio_values', None),
+    #                         'return_dict':True
+    #                     }
+                        
+    #                     # Only add audio values if they exist
+    #                     if 'audio_values' in batch and batch['audio_values'] is not None:
+    #                         audio_values = batch['audio_values']
+    #                         if len(audio_values.shape) == 2:  # [batch_size, length]
+    #                             audio_values = audio_values.unsqueeze(1)  # Add channel dimension
+    #                         forward_args['input_values'] = audio_values
+                        
+    #                     # Forward pass
+    #                     outputs = self.model(**forward_args)
+                        
+    #                     # Compute loss
+    #                     loss = outputs.loss if hasattr(outputs, 'loss') else None
+    
+    #                     # Add this check before accessing loss.item()
+    #                     if loss is not None:
+    #                         val_loss += loss.item()
+    #                     else:
+    #                         print("Warning: Model did not return a loss. Skipping batch.")
+                        
+    #                     # Calculate loss manually if model doesn't return it
+    #                     if hasattr(outputs, 'loss') and outputs.loss is not None:
+    #                         loss = outputs.loss
+    #                     elif hasattr(outputs, 'logits'):
+    #                         # Shift logits and labels for next token prediction
+    #                         shift_logits = outputs.logits[..., :-1, :].contiguous()
+    #                         shift_labels = batch['input_ids'][..., 1:].contiguous()
+    #                         loss = F.cross_entropy(
+    #                             shift_logits.view(-1, shift_logits.size(-1)),
+    #                             shift_labels.view(-1),
+    #                             ignore_index=-100  # Ignore padding tokens
+    #                         )
+    #                     else:
+    #                         loss = None
+    #                         print("Warning: Unable to calculate loss. Skipping batch.")
+    #                         continue
+                        
+    #                     # Update validation loss
+    #                     val_loss += loss.item()
+    #                     val_batches += 1
+                
+    #             val_loss /= len(val_loader)
+    #             print(f"Validation loss: {val_loss:.4f}")
+                
+    #             # Set models back to training mode
+    #             self.model.train()
+    #             self.style_encoder.train()
+    #             self.attributes_encoder.train()
+            
+    #         # Save checkpoint
+    #         checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}.pt")
+    #         torch.save({
+    #             'epoch': epoch,
+    #             'model': self.model.state_dict(),
+    #             'style_encoder': self.style_encoder.state_dict(),
+    #             'attributes_encoder': self.attributes_encoder.state_dict(),
+    #             'optimizer': optimizer.state_dict(),
+    #             'scheduler': scheduler.state_dict(),
+    #         }, checkpoint_path)
+    #         print(f"Saved checkpoint to {checkpoint_path}")
+    
     def train(self, train_dataset, val_dataset=None, num_epochs=None, batch_size=None, 
-         learning_rate=None, checkpoint_dir=None, resume_from=None):
+          learning_rate=None, checkpoint_dir=None, resume_from=None):
         """Train the model on the provided dataset"""
-        # Set training parameters
+        # Configuration
         num_epochs = num_epochs or self.config.max_epochs
         batch_size = batch_size or self.config.batch_size
         learning_rate = learning_rate or self.config.learning_rate
         checkpoint_dir = checkpoint_dir or self.config.checkpoint_dir
-        
-        # Create data loaders
+
+        # Ensure decoder_start_token_id is set to avoid shift_tokens_right error
+        if getattr(self.model.config, 'decoder_start_token_id', None) is None:
+            try:
+                self.model.config.decoder_start_token_id = getattr(self.model.config, 'bos_token_id', None)
+                if self.model.config.decoder_start_token_id is None:
+                    self.model.config.decoder_start_token_id = self.model.config.pad_token_id or 0
+                    print(f"Setting decoder_start_token_id to {self.model.config.decoder_start_token_id}")
+            except AttributeError as e:
+                print(f"Error setting decoder_start_token_id: {e}")
+
+
+        # Data loaders
         train_loader = DataLoader(
             train_dataset,
             batch_size=batch_size,
@@ -823,7 +1091,7 @@ class MusicGenerator:
             num_workers=4,
             collate_fn=train_dataset.collate_fn
         )
-
+        val_loader = None
         if val_dataset:
             val_loader = DataLoader(
                 val_dataset,
@@ -832,236 +1100,118 @@ class MusicGenerator:
                 num_workers=4,
                 collate_fn=val_dataset.collate_fn
             )
-        
-        # Set models to training mode
+
+        # Set models to train mode
         self.model.train()
         self.style_encoder.train()
         self.attributes_encoder.train()
-        
-        # Create optimizer
-        optimizer = AdamW([
-            {'params': self.model.parameters()},
-            {'params': self.style_encoder.parameters()},
-            {'params': self.attributes_encoder.parameters()}
-        ], lr=learning_rate, weight_decay=self.config.weight_decay)
-        
-        # Create learning rate scheduler
+
+        # Optimizer and scheduler
+        optimizer = AdamW(
+            list(self.model.parameters()) + 
+            list(self.style_encoder.parameters()) + 
+            list(self.attributes_encoder.parameters()),
+            lr=learning_rate,
+            weight_decay=self.config.weight_decay
+        )
         scheduler = CosineAnnealingLR(
             optimizer,
             T_max=num_epochs * len(train_loader),
             eta_min=learning_rate / 10
         )
-        
-        # Resume from checkpoint if provided
+
+        # Optionally resume
         start_epoch = 0
         if resume_from:
-            checkpoint = torch.load(resume_from, map_location=self.config.device)
-            self.model.load_state_dict(checkpoint['model'])
-            self.style_encoder.load_state_dict(checkpoint['style_encoder'])
-            self.attributes_encoder.load_state_dict(checkpoint['attributes_encoder'])
-            if 'optimizer' in checkpoint:
-                optimizer.load_state_dict(checkpoint['optimizer'])
-            if 'scheduler' in checkpoint:
-                scheduler.load_state_dict(checkpoint['scheduler'])
-            if 'epoch' in checkpoint:
-                start_epoch = checkpoint['epoch'] + 1
-            print(f"Resumed from epoch {start_epoch}")
-        
-        # Create checkpoint directory
+            ckpt = torch.load(resume_from, map_location=self.config.device)
+            self.model.load_state_dict(ckpt['model'])
+            self.style_encoder.load_state_dict(ckpt['style_encoder'])
+            self.attributes_encoder.load_state_dict(ckpt['attributes_encoder'])
+            optimizer.load_state_dict(ckpt.get('optimizer', {}))
+            scheduler.load_state_dict(ckpt.get('scheduler', {}))
+            start_epoch = ckpt.get('epoch', 0) + 1
+
         os.makedirs(checkpoint_dir, exist_ok=True)
-        
-        # Training loop
+
         for epoch in range(start_epoch, num_epochs):
-            train_loss = 0.0
-            
-            # Progress bar for training
-            progress_bar = tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")
-            
-            for batch in progress_bar:
-                # Move batch to device
-                batch = {k: v.to(self.config.device) if isinstance(v, torch.Tensor) else v 
-                        for k, v in batch.items()}
-                
-                # if 'is_valid' in batch and not batch['is_valid']:
-                #     print("Skipping invalid batch")
-                #     continue
-                
-                # Create forward args dictionary with proper parameter names
-                forward_args = {
-                    'input_ids': batch['input_ids'],
-                    'attention_mask': batch['attention_mask'],
+            total_loss = 0.0
+            for batch in tqdm.tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}"):
+                # Prepare inputs
+                batch_inputs = {
+                    'input_ids': batch['input_ids'].to(self.config.device),
+                    'attention_mask': batch['attention_mask'].to(self.config.device),
                     'return_dict': True
                 }
-                
-                # Handle audio data properly (key parameter name is input_values, not audio_values)
+                # Add audio conditioning if present
                 if 'audio_values' in batch and batch['audio_values'] is not None:
-                    # Get audio and ensure it has the right shape (batch_size, channels, length)
-                    audio_values = batch['audio_values']
-                    if len(audio_values.shape) == 2:  # [batch_size, length]
-                        audio_values = audio_values.unsqueeze(1)  # Add channel dimension
-                    
-                    # Use the correct parameter name (input_values not audio_values)
-                    forward_args['input_values'] = audio_values
-                
-                # Forward pass with correct parameter names
-                outputs = self.model(**forward_args)
-                
-                # Check if loss exists before proceeding
-                if not hasattr(outputs, 'loss') or outputs.loss is None:
-                    print("Warning: Model did not return a loss. Skipping batch.")
-                    continue
-                
-                # Get loss
+                    audio = batch['audio_values']
+                    if audio.dim() == 2:
+                        audio = audio.unsqueeze(1)
+                    audio = audio.to(self.config.device)
+                    batch_inputs['input_values'] = audio
+                    batch_inputs['labels'] = audio
+
+                # Forward pass
+                outputs = self.model(**batch_inputs)
                 loss = outputs.loss
-                
-                # Backward pass (now safe because we checked loss is not None)
+                if loss is None:
+                    print("Warning: No loss returned for this batch. Skipping.")
+                    continue
+
+                # Backward and optimize
+                optimizer.zero_grad()
                 loss.backward()
-                
-                # Update weights
                 optimizer.step()
                 scheduler.step()
-                optimizer.zero_grad()
-                
-                original_forward = self.model.forward
-                
-                labels = batch['input_ids'].clone()
-                # Check input shape and fix if needed
-                if 'input_ids' in kwargs and kwargs['input_ids'] is not None:
-                    if 'input_ids' in batch and batch['input_ids'].dim() > 2:
-                        # Add channel dimension if missing
-                        batch['input_ids'] = batch['input_ids'].unsqueeze(1)
-                
-                # Check attention mask shape
-                if 'attention_mask' in kwargs and kwargs['attention_mask'] is not None:
-                    if 'attention_mask' in batch and batch['attention_mask'].dim() > 2:
-                        batch['attention_mask'] = batch['attention_mask'].unsqueeze(1)
-                        
-                self.model.forward = forward_wrapper(original_forward)
-                
-                # Forward pass with labels
-                outputs = self.model(
-                    input_ids=batch['input_ids'],
-                    attention_mask=batch['attention_mask'],
-                    labels=labels,  # Add labels for loss calculation
-                    return_dict=True
-                )
-                
-                # Check if loss exists
-                if hasattr(outputs, 'loss') and outputs.loss is not None:
-                    loss = outputs.loss
-                    # Backward pass
-                    loss.backward()
-                    # Update weights
-                    optimizer.step()
-                    scheduler.step()
-                    optimizer.zero_grad()
-                    
-                    # Update progress bar
-                    train_loss += loss.item()
-                    progress_bar.set_postfix({'loss': train_loss / (progress_bar.n + 1)})
-                else:
-                    print("Warning: Model did not return a loss. Check model configuration.")
-            
-            # Validation
-            if val_dataset:
-                self.model.eval()
-                val_loss = 0.0
-                val_batches = 0
-                
-                # Set models to evaluation mode
 
+                total_loss += loss.item()
+
+            avg_train_loss = total_loss / len(train_loader)
+            print(f"Epoch {epoch+1} train loss: {avg_train_loss:.4f}")
+
+            # Validation
+            if val_loader:
+                self.model.eval()
                 self.style_encoder.eval()
                 self.attributes_encoder.eval()
-                
+                val_loss = 0.0
                 with torch.no_grad():
                     for batch in tqdm.tqdm(val_loader, desc="Validation"):
-                        # Move batch to device
-                        batch = {k: v.to(self.config.device) if isinstance(v, torch.Tensor) else v 
-                                for k, v in batch.items()}
-                        
-                        # Fix input shapes if needed
-                        if batch['input_ids'].dim() == 2:
-                            batch['input_ids'] = batch['input_ids'].unsqueeze(1)
-                        
-                        if batch['attention_mask'].dim() == 2:
-                            batch['attention_mask'] = batch['attention_mask'].unsqueeze(1)
-                        
-                        # Create labels from input_ids for next token prediction
-                        labels = batch['input_ids'].clone()
-                        
-                        # Check if audio_values exists and is not None
-                        if 'audio_values' not in batch or batch['audio_values'] is None:
-                            print("Skipping batch with missing audio values")
-                            continue
-                            
-                        # Forward pass with proper checks
-                        forward_args = {
-                            'input_ids':batch['input_ids'],
-                            'attention_mask':batch['attention_mask'],
-                            'labels':labels,  # Add labels for loss calculation
-                            'input_values':batch.get('audio_values', None),
-                            'return_dict':True
+                        val_inputs = {
+                            'input_ids': batch['input_ids'].to(self.config.device),
+                            'attention_mask': batch['attention_mask'].to(self.config.device),
+                            'return_dict': True
                         }
-                        
-                        # Only add audio values if they exist
                         if 'audio_values' in batch and batch['audio_values'] is not None:
-                            audio_values = batch['audio_values']
-                            if len(audio_values.shape) == 2:  # [batch_size, length]
-                                audio_values = audio_values.unsqueeze(1)  # Add channel dimension
-                            forward_args['input_values'] = audio_values
-                        
-                        # Forward pass
-                        outputs = self.model(**forward_args)
-                        
-                        # Compute loss
-                        loss = outputs.loss if hasattr(outputs, 'loss') else None
-    
-                        # Add this check before accessing loss.item()
-                        if loss is not None:
-                            val_loss += loss.item()
-                        else:
-                            print("Warning: Model did not return a loss. Skipping batch.")
-                        
-                        # Calculate loss manually if model doesn't return it
-                        if hasattr(outputs, 'loss') and outputs.loss is not None:
-                            loss = outputs.loss
-                        elif hasattr(outputs, 'logits'):
-                            # Shift logits and labels for next token prediction
-                            shift_logits = outputs.logits[..., :-1, :].contiguous()
-                            shift_labels = batch['input_ids'][..., 1:].contiguous()
-                            loss = F.cross_entropy(
-                                shift_logits.view(-1, shift_logits.size(-1)),
-                                shift_labels.view(-1),
-                                ignore_index=-100  # Ignore padding tokens
-                            )
-                        else:
-                            loss = None
-                            print("Warning: Unable to calculate loss. Skipping batch.")
-                            continue
-                        
-                        # Update validation loss
-                        val_loss += loss.item()
-                        val_batches += 1
-                
-                val_loss /= len(val_loader)
-                print(f"Validation loss: {val_loss:.4f}")
-                
-                # Set models back to training mode
+                            audio = batch['audio_values']
+                            if audio.dim() == 2:
+                                audio = audio.unsqueeze(1)
+                            audio = audio.to(self.config.device)
+                            val_inputs['input_values'] = audio
+                            val_inputs['labels'] = audio
+
+                        outputs = self.model(**val_inputs)
+                        loss_val = outputs.loss
+                        if loss_val is not None:
+                            val_loss += loss_val.item()
+                avg_val_loss = val_loss / len(val_loader)
+                print(f"Epoch {epoch+1} val loss: {avg_val_loss:.4f}")
+                # back to train mode
                 self.model.train()
                 self.style_encoder.train()
                 self.attributes_encoder.train()
-            
+
             # Save checkpoint
-            checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch+1}.pt")
+            ckpt_path = os.path.join(checkpoint_dir, f"epoch_{epoch+1}.pt")
             torch.save({
                 'epoch': epoch,
                 'model': self.model.state_dict(),
                 'style_encoder': self.style_encoder.state_dict(),
                 'attributes_encoder': self.attributes_encoder.state_dict(),
                 'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict(),
-            }, checkpoint_path)
-            print(f"Saved checkpoint to {checkpoint_path}")
+                'scheduler': scheduler.state_dict()
+            }, ckpt_path)
+            print(f"Saved checkpoint: {ckpt_path}")
 
 
 def convert_csv_to_musicgen_dataset(csv_file, output_dir, split_ratio=0.9):
