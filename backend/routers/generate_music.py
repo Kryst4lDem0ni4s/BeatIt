@@ -5,7 +5,9 @@ from typing import Optional, List, Dict, Any, Union
 import uuid
 from datetime import datetime, timedelta
 from auth import get_current_user
-from ..training.lyricsgen import generate_lyrics
+from backend.routers.files import GENERATION_STATUSES
+from backend.routers.tracks import get_track_info
+from ..training.lyricsgen import LyricsGenerator
 from ..training.vocalgen import generate_vocals
 from ..training.instrumentalgen import InstrumentalGenerator
 from ..training.musicgen import MusicGenerator
@@ -28,7 +30,7 @@ async def generate_music(
         # Process lyrics based on settings
         lyrics = None
         if request.lyrics_settings == "generate lyrics":
-            lyrics = generate_lyrics(
+            lyrics = LyricsGenerator.generate_lyrics(
                 prompt=request.text_prompt,
                 reference_lyrics=request.style_references.lyrics_references if request.style_references else None,
                 reference_mode=request.reference_usage_mode

@@ -1,3 +1,13 @@
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+from fastapi import Depends, HTTPException, APIRouter
+from grpc import Status
+from backend.config import StorageConfig
+from backend.models import model_types
+from backend.routers.auth import get_current_user
+
+router = APIRouter()
+
 def get_track_info(track_id: str, user_id: str) -> Dict[str, Any]:
     """
     Fetch track information from the database.
@@ -37,7 +47,7 @@ async def get_user_tracks(
         # Log the error
         print(f"Error fetching user tracks: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch user tracks: {str(e)}"
         )
 
@@ -57,7 +67,7 @@ async def get_track_detail(
         
         if not track:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=Status.HTTP_404_NOT_FOUND,
                 detail=f"Track with ID {track_id} not found or does not belong to you"
             )
         
@@ -68,7 +78,7 @@ async def get_track_detail(
     except Exception as e:
         print(f"Error fetching track details: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch track details: {str(e)}"
         )
 
@@ -88,7 +98,7 @@ async def delete_track(
         
         if not track:
             raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
+                status_code=Status.HTTP_404_NOT_FOUND,
                 detail=f"Track with ID {track_id} not found or does not belong to you"
             )
         
@@ -105,7 +115,7 @@ async def delete_track(
     except Exception as e:
         print(f"Error deleting track: {str(e)}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete track: {str(e)}"
         )
 
@@ -187,7 +197,7 @@ def delete_track_from_storage_and_db(track_id: str, user_id: str):
     """
     # Delete the audio file from your storage system
     storage_path = f"users/{user_id}/tracks/{track_id}/final.mp3"
-    storage_config.delete_file(storage_path)
+    StorageConfig.delete_file(storage_path)
     
     # Delete the track record from your database
     # Example with MongoDB:
