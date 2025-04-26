@@ -4,19 +4,12 @@ import os
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI
 
-app = FastAPI()
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 class Settings(BaseSettings):
     # GOOGLE_APPLICATION_CREDENTIALS: str
     CREDENTIALS_FILE: str
-    # DATABASE_URL: str
+    DATABASE_URL: str
+    STORAGE_BUCKET: str
 
     class Config:
         env_file = './.env'

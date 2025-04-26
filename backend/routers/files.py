@@ -4,20 +4,15 @@ from typing import Any, Dict, Optional
 import uuid
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from datetime import datetime
-from auth import get_current_user
-from backend.routers.files import GENERATION_STATUSES
-from backend.routers.tracks import get_track_info
-from ..training.lyricsgen import LyricsGenerator
-from ..training.vocalgen import generate_vocals
-from ..training.instrumentalgen import InstrumentalGenerator
-from ..training.musicgen import MusicGenerator
+from .auth import get_current_user
+from .tracks import get_track_info
 from config import storage_config
-from ..models import model_types
+from models import model_types
 
 router = APIRouter()
 
 # Response model
-@router.post("/upload-audio", response_model=model_types.AudioUploadResponse)
+@router.post("/upload-audio", response_model=model_types.FileUploadResponse)
 async def upload_audio(
     file: UploadFile = File(...),
     type: str = Form(...),

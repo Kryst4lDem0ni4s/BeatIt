@@ -1,12 +1,12 @@
 import os
 import shutil
 from fastapi import APIRouter, Depends, BackgroundTasks, File, Form, HTTPException, Query, Response, UploadFile, WebSocket, status
-from typing import Optional, List, Dict, Any, Union
 import uuid
 from datetime import datetime, timedelta
-from auth import get_current_user
-from backend.routers.files import GENERATION_STATUSES
-from backend.routers.tracks import get_track_info
+from .auth import get_current_user
+from .files import GENERATION_STATUSES
+from .lyrics import generate_lyrics_endpoint
+from .tracks import get_track_info
 from ..training.lyricsgen import LyricsGenerator
 from ..training.vocalgen import generate_vocals
 from ..training.instrumentalgen import InstrumentalGenerator
@@ -17,118 +17,242 @@ from jobs import jobs_db, process_music_generation_job
 
 router = APIRouter()
 
+# @router.post("/generate-music", response_model=model_types.MusicGenerationResponse)
+# async def generate_music(
+#     request: model_types.MusicGenerationRequest,
+#     current_user: dict = Depends(get_current_user)
+# ):
+#     try:
+#         user_id = current_user["uid"]
+        
+#         # Generate a unique track ID
+#         track_id = str(uuid.uuid4())
+        
+#         # Process lyrics based on settings
+#         lyrics = None
+#         if request.lyrics_settings == "generate lyrics":
+#             lyrics = LyricsGenerator.generate_lyrics(
+#                 prompt=request.text_prompt,
+#                 reference_lyrics=request.style_references.lyrics_references if request.style_references else None,
+#                 reference_mode=request.reference_usage_mode
+#             )
+#         elif request.lyrics_settings == "custom lyrics" and request.custom_lyrics:
+#             lyrics = request.custom_lyrics
+        
+#         # Process vocals based on settings
+#         vocal_track_path = None
+#         if request.vocal_settings in ["with vocals", "only vocals"]:
+#             if request.vocals_source == "generate vocals" and lyrics:
+#                 vocal_track_path = generate_vocals(
+#                     lyrics=lyrics,
+#                     pitch=request.pitch,
+#                     reference_tracks=request.style_references.vocals_references if request.style_references else None,
+#                     reference_mode=request.reference_usage_mode,
+#                     user_id=user_id
+#                 )
+#             # Handle custom vocals input case (would need file upload handling)
+        
+#         # Process instrumental based on settings
+#         instrumental_track_path = None
+#         if request.vocal_settings in ["with vocals", "no vocals"]:
+#             if request.instrumental_source == "generate track":
+#                 instrumental_track_path = InstrumentalGenerator.create_midi(
+#                     prompt=request.text_prompt,
+#                     tempo=request.tempo,
+#                     desired_instruments=request.instruments,
+#                     avoided_instruments=request.instruments_to_avoid,
+#                     styles=request.styles_themes,
+#                     avoided_styles=request.styles_themes_to_avoid,
+#                     reference_tracks=request.style_references.music_references if request.style_references else None,
+#                     reference_mode=request.reference_usage_mode,
+#                     user_id=user_id
+#                 )
+#             # Handle custom instrumental input case (would need file upload handling)
+        
+#         # Combine tracks as needed
+#         final_track_path = None
+#         if vocal_track_path and instrumental_track_path:
+#             final_track_path = MusicGenerator.combine_tracks(
+#                 vocals_path=vocal_track_path,
+#                 instrumental_path=instrumental_track_path,
+#                 user_id=user_id,
+#                 track_id=track_id
+#             )
+#         elif vocal_track_path:
+#             final_track_path = vocal_track_path
+#         elif instrumental_track_path:
+#             final_track_path = instrumental_track_path
+#         else:
+#             raise HTTPException(
+#                 status_code=status.HTTP_400_BAD_REQUEST,
+#                 detail="No audio could be generated with the provided settings"
+#             )
+        
+#         # Generate public URL for the track
+#         storage_path = f"users/{user_id}/tracks/{track_id}/final.mp3"
+#         audio_url = storage_config.upload_file(
+#             local_path=final_track_path,
+#             storage_path=storage_path
+#         )
+        
+#         # Build metadata
+#         metadata = {
+#             "created_at": datetime.now().isoformat(),
+#             "user_id": user_id,
+#             "prompt": request.text_prompt,
+#             "lyrics_mode": request.lyrics_settings,
+#             "vocal_mode": request.vocal_settings,
+#             "has_lyrics": request.lyrics_settings != "no lyrics",
+#             "has_vocals": request.vocal_settings != "no vocals",
+#             "has_instrumental": request.vocal_settings != "only vocals",
+#             "tempo": request.tempo,
+#             "pitch": request.pitch,
+#             "styles_themes": request.styles_themes,
+#             "instruments": request.instruments
+#         }
+        
+#         # Store metadata in database
+#         # db.tracks.insert_one({...}) # Uncomment and implement based on your DB
+        
+#         return model_types.MusicGenerationResponse(
+#             status="success",
+#             message="Music generated successfully",
+#             track_id=track_id,
+#             audio_url=audio_url,
+#             metadata=metadata
+#         )
+    
+#     except Exception as e:
+#         # Log the error
+#         print(f"Error in music generation: {str(e)}")
+#         raise HTTPException(
+#             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+#             detail=f"Failed to generate music: {str(e)}"
+#         )
+
 @router.post("/generate-music", response_model=model_types.MusicGenerationResponse)
 async def generate_music(
     request: model_types.MusicGenerationRequest,
+    background_tasks: BackgroundTasks,
     current_user: dict = Depends(get_current_user)
 ):
+    """
+    Orchestrator endpoint for the step-by-step music generation process.
+    
+    This endpoint coordinates the entire generation workflow by sequentially
+    calling each step endpoint and managing the overall process flow.
+    """
     try:
         user_id = current_user["uid"]
         
-        # Generate a unique track ID
-        track_id = str(uuid.uuid4())
-        
-        # Process lyrics based on settings
-        lyrics = None
-        if request.lyrics_settings == "generate lyrics":
-            lyrics = LyricsGenerator.generate_lyrics(
-                prompt=request.text_prompt,
-                reference_lyrics=request.style_references.lyrics_references if request.style_references else None,
-                reference_mode=request.reference_usage_mode
-            )
-        elif request.lyrics_settings == "custom lyrics" and request.custom_lyrics:
-            lyrics = request.custom_lyrics
-        
-        # Process vocals based on settings
-        vocal_track_path = None
-        if request.vocal_settings in ["with vocals", "only vocals"]:
-            if request.vocals_source == "generate vocals" and lyrics:
-                vocal_track_path = generate_vocals(
-                    lyrics=lyrics,
-                    pitch=request.pitch,
-                    reference_tracks=request.style_references.vocals_references if request.style_references else None,
-                    reference_mode=request.reference_usage_mode,
-                    user_id=user_id
-                )
-            # Handle custom vocals input case (would need file upload handling)
-        
-        # Process instrumental based on settings
-        instrumental_track_path = None
-        if request.vocal_settings in ["with vocals", "no vocals"]:
-            if request.instrumental_source == "generate track":
-                instrumental_track_path = InstrumentalGenerator.create_midi(
-                    prompt=request.text_prompt,
-                    tempo=request.tempo,
-                    desired_instruments=request.instruments,
-                    avoided_instruments=request.instruments_to_avoid,
-                    styles=request.styles_themes,
-                    avoided_styles=request.styles_themes_to_avoid,
-                    reference_tracks=request.style_references.music_references if request.style_references else None,
-                    reference_mode=request.reference_usage_mode,
-                    user_id=user_id
-                )
-            # Handle custom instrumental input case (would need file upload handling)
-        
-        # Combine tracks as needed
-        final_track_path = None
-        if vocal_track_path and instrumental_track_path:
-            final_track_path = MusicGenerator.combine_tracks(
-                vocals_path=vocal_track_path,
-                instrumental_path=instrumental_track_path,
-                user_id=user_id,
-                track_id=track_id
-            )
-        elif vocal_track_path:
-            final_track_path = vocal_track_path
-        elif instrumental_track_path:
-            final_track_path = instrumental_track_path
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No audio could be generated with the provided settings"
-            )
-        
-        # Generate public URL for the track
-        storage_path = f"users/{user_id}/tracks/{track_id}/final.mp3"
-        audio_url = storage_config.upload_file(
-            local_path=final_track_path,
-            storage_path=storage_path
+        # Step 1: Initialize session with basic parameters
+        step1_request = model_types.Step1Request(
+            text_prompt=request.text_prompt,
+            vocal_settings=request.vocal_settings,
+            lyrics_settings=request.lyrics_settings,
+            custom_lyrics=request.custom_lyrics
         )
         
-        # Build metadata
-        metadata = {
-            "created_at": datetime.now().isoformat(),
-            "user_id": user_id,
-            "prompt": request.text_prompt,
-            "lyrics_mode": request.lyrics_settings,
-            "vocal_mode": request.vocal_settings,
-            "has_lyrics": request.lyrics_settings != "no lyrics",
-            "has_vocals": request.vocal_settings != "no vocals",
-            "has_instrumental": request.vocal_settings != "only vocals",
-            "tempo": request.tempo,
-            "pitch": request.pitch,
-            "styles_themes": request.styles_themes,
-            "instruments": request.instruments
-        }
+        # Call step1 to initialize session and handle lyrics generation if needed
+        step1_response = await step1_basic_info(step1_request, current_user)
+        session_id = step1_response.session_id
         
-        # Store metadata in database
-        # db.tracks.insert_one({...}) # Uncomment and implement based on your DB
+        # Step 2: Submit style references
+        step2_request = model_types.Step2Request(
+            style_references=request.style_references,
+            reference_usage_mode=request.reference_usage_mode or "guidance_only"
+        )
         
+        # Call step2 to process style references
+        step2_response = await step2_style_references(session_id, step2_request, current_user)
+        
+        # Step 3: Submit musical attributes
+        step3_request = model_types.Step3Request(
+            instruments=request.instruments or [],
+            instruments_to_avoid=request.instruments_to_avoid or [],
+            styles_themes=request.styles_themes or [],
+            styles_themes_to_avoid=request.styles_themes_to_avoid or [],
+            pitch=request.pitch,
+            tempo=request.tempo
+        )
+        
+        # Call step3 to process musical attributes
+        step3_response = await step3_musical_attributes(session_id, step3_request, current_user)
+        
+        # Retrieve the updated session data
+        session_data = generation_sessions[session_id]
+        
+        # Step 4: Review lyrics if needed
+        if session_data["lyrics_settings"] != "no_lyrics":
+            # For lyrics review/modification
+            step4_request = model_types.Step4Request(
+                regenerate_lyrics=False,  # Don't regenerate by default
+                lyrics=None  # Use existing lyrics
+            )
+            
+            # Call step4 to review/process lyrics
+            await step4_lyrics_review(session_id, step4_request, current_user)
+        
+        # Step 5: Finalize and start generation
+        step5_response = await step5_finalize(session_id, background_tasks, current_user)
+        
+        # Calculate estimated generation time
+        estimated_time = calculate_estimated_time(request)
+        
+        # Return response with job information
         return model_types.MusicGenerationResponse(
-            status="success",
-            message="Music generated successfully",
-            track_id=track_id,
-            audio_url=audio_url,
-            metadata=metadata
+            status="processing",
+            message="Music generation started successfully",
+            track_id=step5_response.job_id,
+            audio_url=None,  # Will be available when generation completes
+            estimated_time=estimated_time,
+            metadata={
+                "session_id": session_id,
+                "created_at": datetime.now().isoformat(),
+                "user_id": user_id,
+                "prompt": request.text_prompt,
+                "lyrics_mode": request.lyrics_settings,
+                "vocal_mode": request.vocal_settings,
+                "has_style_references": request.style_references is not None,
+                "instruments_count": len(request.instruments or []),
+                "styles_count": len(request.styles_themes or [])
+            }
         )
-    
+        
     except Exception as e:
-        # Log the error
-        print(f"Error in music generation: {str(e)}")
+        print(f"Error in music generation orchestrator: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to generate music: {str(e)}"
+            detail=f"Failed to orchestrate music generation: {str(e)}"
         )
+
+# Helper function to estimate generation time
+def calculate_estimated_time(request: model_types.MusicGenerationRequest) -> int:
+    """Calculate estimated processing time based on request complexity."""
+    base_time = 60  # Base processing time in seconds
+    
+    # Add time for vocals processing
+    if request.vocal_settings in ["with_vocals", "only_vocals"]:
+        base_time += 60
+        
+    # Add time for each reference file
+    if request.style_references:
+        ref_count = 0
+        if hasattr(request.style_references, "music_references") and request.style_references.music_references:
+            ref_count += len(request.style_references.music_references)
+        if hasattr(request.style_references, "vocals_references") and request.style_references.vocals_references:
+            ref_count += len(request.style_references.vocals_references)
+        if hasattr(request.style_references, "lyrics_references") and request.style_references.lyrics_references:
+            ref_count += len(request.style_references.lyrics_references)
+            
+        base_time += ref_count * 15  # 15 seconds per reference
+    
+    # Add time for complex prompts
+    if request.text_prompt and len(request.text_prompt) > 200:
+        base_time += 30
+        
+    return base_time
+
 
 # Response model
 @router.get("/generation-status/{track_id}", response_model=model_types.GenerationStatusResponse, 
@@ -391,14 +515,27 @@ async def step1_basic_info(
             "custom_lyrics": request.custom_lyrics,
         }
         
-        # Generate lyrics if requested
+        # Generate lyrics if requested by calling the lyrics endpoint
         if request.lyrics_settings == "generate_lyrics":
             try:
-                lyrics = LyricsGenerator.generate_lyrics(prompt=request.text_prompt)
-                session_data["generated_lyrics"] = lyrics
+                # Prepare lyrics generation request
+                lyrics_request = model_types.LyricsGenerationRequest(
+                    prompt=request.text_prompt,
+                    style=None,  # Use default style
+                    reference_lyrics=None  # No references at this stage
+                )
+                
+                # Call lyrics generation endpoint
+                lyrics_response = await generate_lyrics_endpoint(lyrics_request, current_user)
+                
+                # Store generated lyrics in session
+                session_data["generated_lyrics"] = lyrics_response.lyrics_text
+                session_data["lyrics_id"] = lyrics_response.lyrics_id
+                
             except Exception as e:
                 print(f"Error generating lyrics: {str(e)}")
                 session_data["lyrics_generation_error"] = str(e)
+                
         elif request.lyrics_settings == "custom_lyrics":
             session_data["generated_lyrics"] = request.custom_lyrics
         
@@ -467,8 +604,21 @@ async def step2_style_references(
         session_data["style_references"] = request.style_references.dict()
         session_data["reference_usage_mode"] = request.reference_usage_mode
         
-        # Validate file references exist
-        # In a real implementation, you would verify the file IDs here
+        # Add helper function
+        def file_exists(file_id: str, user_id: str) -> bool:
+            """Check if a file exists and belongs to the user."""
+            # In a real implementation, query your database
+            # For now, we'll just check if the file_id is not empty
+            return bool(file_id)
+
+        # In step2 endpoint
+        if request.style_references:
+            for ref_id in request.style_references.music_references or []:
+                if not file_exists(ref_id, user_id):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Reference file {ref_id} not found or doesn't belong to you"
+                    )
         
         # Define next step information
         next_step = {
@@ -607,34 +757,60 @@ async def step4_lyrics_review(
                 detail=f"Invalid step sequence. Current step is {session_data['step']}."
             )
         
-        # Check if lyrics settings allows for lyrics
+        # Handle case where no lyrics are needed but step4 is called anyway
         if session_data["lyrics_settings"] == "no_lyrics":
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Lyrics review not applicable - lyrics setting is 'no_lyrics'."
+            # Skip to step 5 instead of raising an error
+            session_data["step"] = 4  # Still increment step
+            
+            next_step = {
+                "step": 5,
+                "endpoint": f"/api/music/step5/{session_id}/finalize",
+                "description": "Finalize all parameters and start generation",
+                "required_fields": []
+            }
+            
+            return model_types.Step4Response(
+                session_id=session_id,
+                lyrics=None,  # No lyrics needed
+                session_data=session_data,
+                next_step=next_step
             )
         
         # Update session data
         session_data["step"] = 4
         session_data["updated_at"] = datetime.now().isoformat()
         
-        # Handle lyrics modification/regeneration
+        # Get current lyrics
         lyrics = session_data.get("generated_lyrics", "")
         
+        # Handle lyrics regeneration if requested
         if request.regenerate_lyrics:
-            # Regenerate lyrics
             try:
-                lyrics = LyricsGenerator.generate_lyrics(prompt=session_data["text_prompt"])
+                # Create lyrics generation request
+                lyrics_request = model_types.LyricsGenerationRequest(
+                    prompt=session_data["text_prompt"],
+                    style=None,  # Default style
+                    reference_lyrics=session_data.get("style_references", {}).get("lyrics_references")
+                )
+                
+                # Call lyrics generation endpoint
+                lyrics_response = await generate_lyrics_endpoint(lyrics_request, current_user)
+                
+                # Update session with new lyrics
+                lyrics = lyrics_response.lyrics_text
                 session_data["generated_lyrics"] = lyrics
+                session_data["lyrics_id"] = lyrics_response.lyrics_id
                 session_data["lyrics_regenerated"] = True
+                
             except Exception as e:
                 print(f"Error regenerating lyrics: {str(e)}")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                     detail=f"Failed to regenerate lyrics: {str(e)}"
                 )
+                
         elif request.lyrics is not None:
-            # Use modified lyrics
+            # Use modified lyrics provided by user
             lyrics = request.lyrics
             session_data["generated_lyrics"] = lyrics
             session_data["lyrics_modified"] = True
@@ -662,6 +838,7 @@ async def step4_lyrics_review(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process step 4: {str(e)}"
         )
+
 
 @router.post("/step5/{session_id}/finalize", response_model=model_types.Step5Response)
 async def step5_finalize(
@@ -723,15 +900,21 @@ async def step5_finalize(
             "status": "queued"
         }
         
-        # In a real implementation, you'd store this in a proper job queue or database
-        # For demonstration, we'll use a background task
+        # Start the actual generation process in the background
         background_tasks.add_task(
-            start_generation_job,
-            job_params=job_params
+            process_music_generation_job,
+            job_id=job_id,
+            user_id=user_id,
+            parameters=job_params
         )
         
-        # Clean up session (optional, can also keep for reference)
-        # del generation_sessions[session_id]
+        # Optionally, add session cleanup to prevent memory leaks
+        # This would be after a timeout period in a real application
+        # background_tasks.add_task(
+        #     cleanup_session_after_timeout,
+        #     session_id=session_id,
+        #     timeout=3600  # 1 hour
+        # )
         
         return model_types.Step5Response(
             job_id=job_id,

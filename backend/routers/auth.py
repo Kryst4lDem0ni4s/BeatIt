@@ -5,7 +5,7 @@ import firebase_admin
 from firebase_admin import credentials, auth, db
 from fastapi import Depends, FastAPI, HTTPException, status, APIRouter
 from fastapi import Request
-from backend.models.model_types import LoginRequest
+from models.model_types import LoginRequest
 
 app = FastAPI()
 router = APIRouter()

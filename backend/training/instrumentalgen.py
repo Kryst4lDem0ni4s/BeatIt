@@ -8,6 +8,8 @@ from keras.api.layers import LSTM, Dense, Dropout, BatchNormalization, Activatio
 from keras.api.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
 from keras.api.utils import to_categorical
 
+from musicgen import MusicGenerator
+
 class InstrumentalGenerator:
     def __init__(self):
         self.notes = []

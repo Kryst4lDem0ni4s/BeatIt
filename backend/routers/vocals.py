@@ -2,9 +2,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
 from fastapi import BackgroundTasks, Depends, HTTPException, APIRouter, Query, Response, status
-from backend.config import StorageConfig
-from backend.models import model_types
-from backend.routers.auth import get_current_user
+from ..config import StorageConfig
+from ..models import model_types
+from .auth import get_current_user
 from vocalgen import generate_vocals
 
 router = APIRouter()        

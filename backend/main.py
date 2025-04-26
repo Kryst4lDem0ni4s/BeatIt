@@ -6,7 +6,7 @@ from firebase_admin import credentials
 import firebase_admin
 import uvicorn
 from config import settings
-from routers import auth, generate_music
+from routers import auth, generate_music, lyrics, tracks, vocals, jobs, files, connection_manager, instrumentals
 from log_base import setup_logger
 
 logger = setup_logger(__name__)
@@ -28,7 +28,14 @@ app.add_middleware(
 )
 
 app.include_router(auth.router, tags=["Authentication"], prefix="/api/auth")
-app.include_router(auth.router, tags=["Authentication"], prefix="/api/generate-music")
+app.include_router(generate_music.router, tags=["Generate_Music"], prefix="/api/generate-music")
+app.include_router(lyrics.router, tags=["Lyrics"], prefix="/api/lyrics")
+app.include_router(vocals.router, tags=["Vocals"], prefix="/api/vocals")
+app.include_router(instrumentals.router, tags=["Instrumentals"], prefix="/api/instrumentals")
+app.include_router(tracks.router, tags=["Tracks"], prefix="/api/tracks")
+app.include_router(jobs.router, tags=["Jobs"], prefix="/api/jobs")
+app.include_router(files.router, tags=["Files"], prefix="/api/files")
+app.include_router(connection_manager.router, tags=["Connection_Manager"], prefix="/api/connection-manager")
 
 @app.get("/health")
 async def root():
@@ -37,8 +44,10 @@ async def root():
 
 if __name__ == "__main__":
     uvicorn.run(
-        "app.main:app", host="127.0.0.1", port=8000, log_level="info", reload=True
+        "main:app", host="127.0.0.1", port=8000, log_level="info", reload=True
     )
+    
+    
     
 # from fastapi import FastAPI
 # from routers.options import router as options_router
