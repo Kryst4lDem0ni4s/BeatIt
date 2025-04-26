@@ -1,8 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
-from fastapi import BackgroundTasks, Depends, HTTPException, APIRouter, Query, Response
-from grpc import Status
+from fastapi import BackgroundTasks, Depends, HTTPException, APIRouter, Query, Response, status
 from backend.config import StorageConfig
 from backend.models import model_types
 from backend.routers.auth import get_current_user
@@ -98,7 +97,7 @@ async def generate_instrumental(
     except Exception as e:
         print(f"Error in instrumental generation: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process instrumental generation: {str(e)}"
         )
 
@@ -120,7 +119,7 @@ async def customize_instrumental(
         # Check if instrumental exists
         if instrumental_id not in instrumentals_db:
             raise HTTPException(
-                status_code=Status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Instrumental with ID {instrumental_id} not found"
             )
         
@@ -128,20 +127,20 @@ async def customize_instrumental(
         instrumental_data = instrumentals_db[instrumental_id]
         if instrumental_data["user_id"] != user_id:
             raise HTTPException(
-                status_code=Status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to customize this instrumental"
             )
         
         # Check if instrumental is in a customizable state
         if instrumental_data["status"] == "processing":
             raise HTTPException(
-                status_code=Status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Instrumental is still processing and cannot be customized yet"
             )
         
         if instrumental_data["status"] == "failed":
             raise HTTPException(
-                status_code=Status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed instrumental cannot be customized. Please generate a new one."
             )
         
@@ -197,7 +196,7 @@ async def customize_instrumental(
     except Exception as e:
         print(f"Error in instrumental customization: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process instrumental customization: {str(e)}"
         )
 
@@ -385,7 +384,7 @@ async def get_instrumental_status(
         # Check if instrumental exists
         if instrumental_id not in instrumentals_db:
             raise HTTPException(
-                status_code=Status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Instrumental with ID {instrumental_id} not found"
             )
         
@@ -393,7 +392,7 @@ async def get_instrumental_status(
         instrumental_data = instrumentals_db[instrumental_id]
         if instrumental_data["user_id"] != user_id:
             raise HTTPException(
-                status_code=Status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to access this instrumental"
             )
         
@@ -409,6 +408,6 @@ async def get_instrumental_status(
     except Exception as e:
         print(f"Error retrieving instrumental status: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve instrumental status: {str(e)}"
         )

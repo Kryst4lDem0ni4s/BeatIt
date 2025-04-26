@@ -1,8 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
-from fastapi import BackgroundTasks, Depends, HTTPException, APIRouter, Query, Response
-from grpc import Status
+from fastapi import BackgroundTasks, Depends, HTTPException, APIRouter, Query, Response, status
 from backend.config import StorageConfig
 from backend.models import model_types
 from backend.routers.auth import get_current_user
@@ -43,7 +42,7 @@ async def generate_lyrics_endpoint(
         except Exception as e:
             print(f"Error generating lyrics: {str(e)}")
             raise HTTPException(
-                status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to generate lyrics: {str(e)}"
             )
         
@@ -92,7 +91,7 @@ async def generate_lyrics_endpoint(
     except Exception as e:
         print(f"Error in lyrics generation endpoint: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process lyrics generation: {str(e)}"
         )
 
@@ -113,7 +112,7 @@ async def modify_lyrics(
         # Check if lyrics exist
         if lyrics_id not in lyrics_db:
             raise HTTPException(
-                status_code=Status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Lyrics with ID {lyrics_id} not found"
             )
         
@@ -121,7 +120,7 @@ async def modify_lyrics(
         lyrics_data = lyrics_db[lyrics_id]
         if lyrics_data["user_id"] != user_id:
             raise HTTPException(
-                status_code=Status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to modify these lyrics"
             )
         
@@ -156,7 +155,7 @@ async def modify_lyrics(
     except Exception as e:
         print(f"Error modifying lyrics: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to modify lyrics: {str(e)}"
         )
 
@@ -175,7 +174,7 @@ async def get_lyrics(
         # Check if lyrics exist
         if lyrics_id not in lyrics_db:
             raise HTTPException(
-                status_code=Status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Lyrics with ID {lyrics_id} not found"
             )
         
@@ -183,7 +182,7 @@ async def get_lyrics(
         lyrics_data = lyrics_db[lyrics_id]
         if lyrics_data["user_id"] != user_id:
             raise HTTPException(
-                status_code=Status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to access these lyrics"
             )
         
@@ -200,7 +199,7 @@ async def get_lyrics(
     except Exception as e:
         print(f"Error retrieving lyrics: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve lyrics: {str(e)}"
         )
         # In-memory vocals storage (replace with database in production)

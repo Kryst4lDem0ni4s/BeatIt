@@ -1,8 +1,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
-from fastapi import BackgroundTasks, Depends, HTTPException, APIRouter, Query, Response
-from grpc import Status
+from fastapi import BackgroundTasks, Depends, HTTPException, APIRouter, Query, Response, status
 from backend.config import StorageConfig
 from backend.models import model_types
 from backend.routers.auth import get_current_user
@@ -33,7 +32,7 @@ async def generate_vocals_endpoint(
         
         if not lyrics_text:
             raise HTTPException(
-                status_code=Status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Lyrics with ID {request.lyrics_id} not found or does not belong to you"
             )
         
@@ -47,7 +46,7 @@ async def generate_vocals_endpoint(
             "lyrics_id": request.lyrics_id,
             "created_at": datetime.now(),
             "updated_at": datetime.now(),
-            "Status": "processing",
+            "status": "processing",
             "vocals_url": None,
             "style": request.style.dict() if request.style else {},
             "pitch": request.pitch.dict() if request.pitch else {},
@@ -74,7 +73,7 @@ async def generate_vocals_endpoint(
         return model_types.VocalsGenerationResponse(
             vocals_id=vocals_id,
             vocals_url=None,
-            Status="processing",
+            status="processing",
             estimated_completion_time=calculate_estimated_time(lyrics_text, request.style, request.pitch)
         )
         
@@ -83,7 +82,7 @@ async def generate_vocals_endpoint(
     except Exception as e:
         print(f"Error in vocals generation: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process vocals generation: {str(e)}"
         )
 
@@ -105,7 +104,7 @@ async def customize_vocals_endpoint(
         # Check if vocals exist
         if vocals_id not in vocals_db:
             raise HTTPException(
-                status_code=Status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Vocals with ID {vocals_id} not found"
             )
         
@@ -113,20 +112,20 @@ async def customize_vocals_endpoint(
         vocals_data = vocals_db[vocals_id]
         if vocals_data["user_id"] != user_id:
             raise HTTPException(
-                status_code=Status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to customize these vocals"
             )
         
         # Check if vocals are in a customizable state
-        if vocals_data["Status"] == "processing":
+        if vocals_data["status"] == "processing":
             raise HTTPException(
-                status_code=Status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Vocals are still processing and cannot be customized yet"
             )
         
-        if vocals_data["Status"] == "failed":
+        if vocals_data["status"] == "failed":
             raise HTTPException(
-                status_code=Status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Failed vocals cannot be customized. Please generate new vocals."
             )
         
@@ -164,7 +163,7 @@ async def customize_vocals_endpoint(
         vocals_data["metadata"]["version"] = new_version
         
         # Mark as processing
-        vocals_data["Status"] = "processing"
+        vocals_data["status"] = "processing"
         vocals_data["updated_at"] = datetime.now()
         
         # Start vocals customization in background
@@ -180,7 +179,7 @@ async def customize_vocals_endpoint(
         return model_types.VocalsCustomizationResponse(
             vocals_id=vocals_id,
             vocals_url=None,  # Will be updated when processing completes
-            Status="processing",
+            status="processing",
             metadata=vocals_data["metadata"]
         )
         
@@ -189,7 +188,7 @@ async def customize_vocals_endpoint(
     except Exception as e:
         print(f"Error in vocals customization: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process vocals customization: {str(e)}"
         )
 
@@ -214,11 +213,11 @@ async def process_vocals_generation(vocals_id: str, user_id: str, lyrics_text: s
     This runs asynchronously after the API response is sent.
     """
     try:
-        # Update Status to processing
-        vocals_db[vocals_id]["Status"] = "processing"
+        # Update status to processing
+        vocals_db[vocals_id]["status"] = "processing"
         vocals_db[vocals_id]["metadata"]["processing_history"].append({
             "timestamp": datetime.now().isoformat(),
-            "Status": "processing_started"
+            "status": "processing_started"
         })
         
         # Call your vocals generation function
@@ -243,23 +242,23 @@ async def process_vocals_generation(vocals_id: str, user_id: str, lyrics_text: s
             storage_path=storage_path
         )
         
-        # Update the vocals record with completed Status and URL
-        vocals_db[vocals_id]["Status"] = "completed"
+        # Update the vocals record with completed status and URL
+        vocals_db[vocals_id]["status"] = "completed"
         vocals_db[vocals_id]["vocals_url"] = vocals_url
         vocals_db[vocals_id]["updated_at"] = datetime.now()
         vocals_db[vocals_id]["metadata"]["processing_history"].append({
             "timestamp": datetime.now().isoformat(),
-            "Status": "completed"
+            "status": "completed"
         })
         
     except Exception as e:
-        # Update with failed Status
-        vocals_db[vocals_id]["Status"] = "failed"
+        # Update with failed status
+        vocals_db[vocals_id]["status"] = "failed"
         vocals_db[vocals_id]["updated_at"] = datetime.now()
         vocals_db[vocals_id]["metadata"]["error"] = str(e)
         vocals_db[vocals_id]["metadata"]["processing_history"].append({
             "timestamp": datetime.now().isoformat(),
-            "Status": "failed",
+            "status": "failed",
             "error": str(e)
         })
         print(f"Error processing vocals generation: {str(e)}")
@@ -271,11 +270,11 @@ async def process_vocals_customization(vocals_id: str, user_id: str, original_vo
     This runs asynchronously after the API response is sent.
     """
     try:
-        # Update Status to processing
-        vocals_db[vocals_id]["Status"] = "processing"
+        # Update status to processing
+        vocals_db[vocals_id]["status"] = "processing"
         vocals_db[vocals_id]["metadata"]["processing_history"].append({
             "timestamp": datetime.now().isoformat(),
-            "Status": "customization_started"
+            "status": "customization_started"
         })
         
         # Call your vocals customization function
@@ -300,23 +299,23 @@ async def process_vocals_customization(vocals_id: str, user_id: str, original_vo
             storage_path=storage_path
         )
         
-        # Update the vocals record with completed Status and URL
-        vocals_db[vocals_id]["Status"] = "completed"
+        # Update the vocals record with completed status and URL
+        vocals_db[vocals_id]["status"] = "completed"
         vocals_db[vocals_id]["vocals_url"] = vocals_url
         vocals_db[vocals_id]["updated_at"] = datetime.now()
         vocals_db[vocals_id]["metadata"]["processing_history"].append({
             "timestamp": datetime.now().isoformat(),
-            "Status": "customization_completed"
+            "status": "customization_completed"
         })
         
     except Exception as e:
-        # Update with failed Status
-        vocals_db[vocals_id]["Status"] = "failed"
+        # Update with failed status
+        vocals_db[vocals_id]["status"] = "failed"
         vocals_db[vocals_id]["updated_at"] = datetime.now()
         vocals_db[vocals_id]["metadata"]["error"] = str(e)
         vocals_db[vocals_id]["metadata"]["processing_history"].append({
             "timestamp": datetime.now().isoformat(),
-            "Status": "customization_failed",
+            "status": "customization_failed",
             "error": str(e)
         })
         print(f"Error processing vocals customization: {str(e)}")
@@ -349,14 +348,14 @@ def calculate_estimated_time(lyrics_text: str, style: Optional[model_types.Vocal
     # Calculate final estimate
     return int(base_time * style_multiplier * pitch_multiplier)
 
-# Additional endpoint to get vocals Status (optional but recommended)
+# Additional endpoint to get vocals status (optional but recommended)
 @router.get("/{vocals_id}", response_model=model_types.VocalsCustomizationResponse)
 async def get_vocals_status(
     vocals_id: str,
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Get the Status of a vocals generation or customization process.
+    Get the status of a vocals generation or customization process.
     """
     try:
         user_id = current_user["uid"]
@@ -364,7 +363,7 @@ async def get_vocals_status(
         # Check if vocals exist
         if vocals_id not in vocals_db:
             raise HTTPException(
-                status_code=Status.HTTP_404_NOT_FOUND,
+                status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Vocals with ID {vocals_id} not found"
             )
         
@@ -372,22 +371,22 @@ async def get_vocals_status(
         vocals_data = vocals_db[vocals_id]
         if vocals_data["user_id"] != user_id:
             raise HTTPException(
-                status_code=Status.HTTP_403_FORBIDDEN,
+                status_code=status.HTTP_403_FORBIDDEN,
                 detail="You do not have permission to access these vocals"
             )
         
         return model_types.VocalsCustomizationResponse(
             vocals_id=vocals_id,
             vocals_url=vocals_data.get("vocals_url"),
-            Status=vocals_data["Status"],
+            status=vocals_data["status"],
             metadata=vocals_data["metadata"]
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error retrieving vocals Status: {str(e)}")
+        print(f"Error retrieving vocals status: {str(e)}")
         raise HTTPException(
-            status_code=Status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve vocals Status: {str(e)}")
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to retrieve vocals status: {str(e)}")
         
