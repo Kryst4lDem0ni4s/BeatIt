@@ -1,6 +1,6 @@
 import logging
-from fastapi import security
-from fastapi.security import HTTPAuthorizationCredentials
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends
 import firebase_admin
 from firebase_admin import credentials, auth, db
 from fastapi import Depends, FastAPI, HTTPException, status, APIRouter
@@ -296,7 +296,9 @@ async def user_specific_endpoint(request: Request):
             detail="Failed to process request"
         )
 
-async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+bearer_scheme = HTTPBearer()
+
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme)):
     try:
         token = credentials.credentials
         # Verify the Firebase token

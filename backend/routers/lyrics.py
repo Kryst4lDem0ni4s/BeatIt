@@ -2,12 +2,11 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 import uuid
 from fastapi import BackgroundTasks, Depends, HTTPException, APIRouter, Query, Response, status
-from backend.config import StorageConfig
-from backend.models import model_types
-from backend.routers.auth import get_current_user
-from instrumentalgen import InstrumentalGenerator
-from lyricsgen import LyricsGenerator
-from vocalgen import generate_vocals
+from config import StorageConfig
+from models import model_types
+from .auth import get_current_user
+from training.lyricsgen import LyricsGenerator
+from training.vocalgen import generate_vocals
 
 router = APIRouter() 
 

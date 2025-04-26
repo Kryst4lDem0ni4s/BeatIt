@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -127,11 +127,6 @@ class FileMetadata(BaseModel):
 class FileDeleteResponse(BaseModel):
     status: str
     message: str
-    
-class StyleReferences(BaseModel):
-    lyrics_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for lyrics references")
-    vocals_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for vocal references")
-    music_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for music references")
 
 class MusicGenerationInitRequest(BaseModel):
     text_prompt: str = Field(..., description="Textual description of desired music")
@@ -161,15 +156,28 @@ class JobStatusResponse(BaseModel):
     estimated_time: Optional[int] = None  # in seconds
     message: Optional[str] = None
     
+class StyleReferences(BaseModel):
+    sample_lyrics: Optional[List[str]] = None
+    sample_music_tracks: Optional[List[str]] = None
+    lyrics_for_usage: Optional[List[str]] = None
+    music_tracks_for_usage: Optional[List[str]] = None
+    music_tracks_for_sampling: Optional[List[str]] = None
+    vocal_tracks_for_usage: Optional[List[str]] = None
+    vocal_tracks_for_sampling: Optional[List[str]] = None
 
 class Step1Request(BaseModel):
-    text_prompt: str = Field(..., description="Textual description of desired music")
-    vocal_settings: VocalSettingsEnum = Field(..., description="Vocal preferences")
-    lyrics_settings: LyricsSettingsEnum = Field(..., description="Lyrics preferences")
-    custom_lyrics: Optional[str] = Field(None, description="Text content when custom lyrics are selected")
+    text_prompt: str
+    vocal_settings: Literal["no_vocals", "only_vocals", "with_vocals"]
+    lyrics_settings: Literal["no_lyrics", "custom_lyrics", "generate_lyrics"]
+    custom_lyrics: Optional[str] = None
+    lyrics_style: Optional[Dict[str, Any]] = None
+    vocals_source: Optional[Literal["generate_vocals", "custom_vocals"]] = None
+    instrumental_source: Optional[Literal["generate_music", "custom_music"]] = None
+    style_references: Optional[StyleReferences] = None
 
 class Step1Response(BaseModel):
     session_id: str
+    session_data: Dict[str, Any]
     next_step: Dict[str, Any]
 
 # Request/Response models for Step 2
@@ -179,8 +187,28 @@ class StyleReferences(BaseModel):
     music_references: Optional[List[str]] = Field(default=[], description="Array of file_ids for music references")
 
 class Step2Request(BaseModel):
-    style_references: StyleReferences
-    reference_usage_mode: ReferenceUsageModeEnum = Field("guidance_only", description="How references should be used")
+    # Style references
+    style_references: Optional[StyleReferences] = None
+    reference_usage_mode: Optional[Literal["guidance_only", "direct_use", "hybrid"]] = "guidance_only"
+    
+    # Instrument selection
+    instruments: Optional[List[str]] = None
+    instruments_to_avoid: Optional[List[str]] = None
+    
+    # Style preferences
+    styles_themes: Optional[List[str]] = None
+    styles_themes_to_avoid: Optional[List[str]] = None
+    
+    # Musical attributes
+    pitch: Optional[str] = None
+    tempo: Optional[int] = None
+    
+    # Voice type (for vocals)
+    voice_type: Optional[Literal["male", "female", "neutral"]] = "neutral"
+    
+    # Track duration in seconds (max 300 seconds = 5 minutes)
+    duration: Optional[int] = 180  # Default 3 minutes
+
 
 class StepResponse(BaseModel):
     session_id: str

@@ -7,12 +7,8 @@ from .auth import get_current_user
 from .files import GENERATION_STATUSES
 from .lyrics import generate_lyrics_endpoint
 from .tracks import get_track_info
-from ..training.lyricsgen import LyricsGenerator
-from ..training.vocalgen import generate_vocals
-from ..training.instrumentalgen import InstrumentalGenerator
-from ..training.musicgen import MusicGenerator
 from config import storage_config
-from ..models import model_types
+from models import model_types
 from jobs import jobs_db, process_music_generation_job
 
 router = APIRouter()
@@ -146,24 +142,46 @@ async def generate_music(
         user_id = current_user["uid"]
         
         # Step 1: Initialize session with basic parameters
+        style_references = model_types.StyleReferences(
+            sample_lyrics=request.style_references.sample_lyrics if hasattr(request, "style_references") and hasattr(request.style_references, "sample_lyrics") else None,
+            sample_music_tracks=request.style_references.sample_music_tracks if hasattr(request, "style_references") and hasattr(request.style_references, "sample_music_tracks") else None,
+            lyrics_for_usage=request.style_references.lyrics_for_usage if hasattr(request, "style_references") and hasattr(request.style_references, "lyrics_for_usage") else None,
+            music_tracks_for_usage=request.style_references.music_tracks_for_usage if hasattr(request, "style_references") and hasattr(request.style_references, "music_tracks_for_usage") else None,
+            music_tracks_for_sampling=request.style_references.music_tracks_for_sampling if hasattr(request, "style_references") and hasattr(request.style_references, "music_tracks_for_sampling") else None,
+            vocal_tracks_for_usage=request.style_references.vocal_tracks_for_usage if hasattr(request, "style_references") and hasattr(request.style_references, "vocal_tracks_for_usage") else None,
+            vocal_tracks_for_sampling=request.style_references.vocal_tracks_for_sampling if hasattr(request, "style_references") and hasattr(request.style_references, "vocal_tracks_for_sampling") else None
+        )
+        
         step1_request = model_types.Step1Request(
             text_prompt=request.text_prompt,
             vocal_settings=request.vocal_settings,
             lyrics_settings=request.lyrics_settings,
-            custom_lyrics=request.custom_lyrics
+            custom_lyrics=request.custom_lyrics,
+            lyrics_style=request.lyrics_style if hasattr(request, "lyrics_style") else None,
+            vocals_source=request.vocals_source if hasattr(request, "vocals_source") else None,
+            instrumental_source=request.instrumental_source if hasattr(request, "instrumental_source") else None,
+            style_references=style_references
         )
         
         # Call step1 to initialize session and handle lyrics generation if needed
         step1_response = await step1_basic_info(step1_request, current_user)
         session_id = step1_response.session_id
         
-        # Step 2: Submit style references
+        # Step 2: Submit style references and musical attributes
         step2_request = model_types.Step2Request(
             style_references=request.style_references,
-            reference_usage_mode=request.reference_usage_mode or "guidance_only"
+            reference_usage_mode=request.reference_usage_mode or "guidance_only",
+            instruments=request.instruments,
+            instruments_to_avoid=request.instruments_to_avoid,
+            styles_themes=request.styles_themes,
+            styles_themes_to_avoid=request.styles_themes_to_avoid,
+            pitch=request.pitch,
+            tempo=request.tempo,
+            voice_type=request.voice_type,
+            duration=request.duration
         )
-        
-        # Call step2 to process style references
+
+        # Call step2 to process style references and musical attributes
         step2_response = await step2_style_references(session_id, step2_request, current_user)
         
         # Step 3: Submit musical attributes
@@ -495,7 +513,7 @@ async def step1_basic_info(
     Step 1: Submit initial generation parameters.
     
     This endpoint collects basic information about the desired music generation,
-    including text prompt, vocal settings, and lyrics preferences.
+    including text prompt, vocal settings, lyrics preferences, and style references.
     """
     try:
         user_id = current_user["uid"]
@@ -503,7 +521,7 @@ async def step1_basic_info(
         # Generate session ID
         session_id = str(uuid.uuid4())
         
-        # Initialize session data
+        # Initialize session data with basic parameters
         session_data = {
             "user_id": user_id,
             "created_at": datetime.now().isoformat(),
@@ -512,17 +530,28 @@ async def step1_basic_info(
             "text_prompt": request.text_prompt,
             "vocal_settings": request.vocal_settings,
             "lyrics_settings": request.lyrics_settings,
-            "custom_lyrics": request.custom_lyrics,
+            "custom_lyrics": request.custom_lyrics if request.lyrics_settings == "custom_lyrics" else None,
+            "vocals_source": request.vocals_source if hasattr(request, "vocals_source") else None,
+            "instrumental_source": request.instrumental_source if hasattr(request, "instrumental_source") else None,
+            "style_references": {
+                "sample_lyrics": request.style_references.sample_lyrics if hasattr(request, "style_references") and hasattr(request.style_references, "sample_lyrics") else None,
+                "sample_music_tracks": request.style_references.sample_music_tracks if hasattr(request, "style_references") and hasattr(request.style_references, "sample_music_tracks") else None,
+                "lyrics_for_usage": request.style_references.lyrics_for_usage if hasattr(request, "style_references") and hasattr(request.style_references, "lyrics_for_usage") else None,
+                "music_tracks_for_usage": request.style_references.music_tracks_for_usage if hasattr(request, "style_references") and hasattr(request.style_references, "music_tracks_for_usage") else None,
+                "music_tracks_for_sampling": request.style_references.music_tracks_for_sampling if hasattr(request, "style_references") and hasattr(request.style_references, "music_tracks_for_sampling") else None,
+                "vocal_tracks_for_usage": request.style_references.vocal_tracks_for_usage if hasattr(request, "style_references") and hasattr(request.style_references, "vocal_tracks_for_usage") else None,
+                "vocal_tracks_for_sampling": request.style_references.vocal_tracks_for_sampling if hasattr(request, "style_references") and hasattr(request.style_references, "vocal_tracks_for_sampling") else None
+            }
         }
         
-        # Generate lyrics if requested by calling the lyrics endpoint
+        # Process lyrics based on settings
         if request.lyrics_settings == "generate_lyrics":
             try:
                 # Prepare lyrics generation request
                 lyrics_request = model_types.LyricsGenerationRequest(
                     prompt=request.text_prompt,
-                    style=None,  # Use default style
-                    reference_lyrics=None  # No references at this stage
+                    style=request.lyrics_style if hasattr(request, "lyrics_style") else None,
+                    reference_lyrics=session_data["style_references"]["sample_lyrics"]
                 )
                 
                 # Call lyrics generation endpoint
@@ -537,21 +566,47 @@ async def step1_basic_info(
                 session_data["lyrics_generation_error"] = str(e)
                 
         elif request.lyrics_settings == "custom_lyrics":
+            # Use provided custom lyrics
             session_data["generated_lyrics"] = request.custom_lyrics
+        
+        # Handle real usage files vs sampling files
+        if request.vocal_settings in ["with_vocals", "only_vocals"]:
+            # Check if we need to use real vocal tracks or generate vocals
+            if hasattr(request, "vocals_source") and request.vocals_source == "custom_vocals":
+                # Use uploaded vocal tracks for real usage
+                if session_data["style_references"]["vocal_tracks_for_usage"]:
+                    session_data["vocal_track_id"] = session_data["style_references"]["vocal_tracks_for_usage"][0]
+                    session_data["using_custom_vocals"] = True
+            else:
+                # Will generate vocals in later steps
+                session_data["using_custom_vocals"] = False
+        
+        # Handle instrumental source
+        if request.vocal_settings in ["with_vocals", "no_vocals"]:
+            # Check if we need to use real instrumental tracks or generate instrumentals
+            if hasattr(request, "instrumental_source") and request.instrumental_source == "custom_music":
+                # Use uploaded instrumental tracks for real usage
+                if session_data["style_references"]["music_tracks_for_usage"]:
+                    session_data["instrumental_track_id"] = session_data["style_references"]["music_tracks_for_usage"][0]
+                    session_data["using_custom_instrumental"] = True
+            else:
+                # Will generate instrumental in later steps
+                session_data["using_custom_instrumental"] = False
         
         # Store session data
         generation_sessions[session_id] = session_data
         
-        # Define next step information
+        # Determine next step
         next_step = {
             "step": 2,
             "endpoint": f"/api/music/step2/{session_id}",
             "description": "Submit style references for the generation job",
-            "required_fields": ["style_references", "reference_usage_mode"]
+            "required_fields": ["reference_usage_mode"]
         }
         
         return model_types.Step1Response(
             session_id=session_id,
+            session_data=session_data,
             next_step=next_step
         )
         
@@ -562,6 +617,7 @@ async def step1_basic_info(
             detail=f"Failed to process step 1: {str(e)}"
         )
 
+
 @router.post("/step2/{session_id}", response_model=model_types.StepResponse)
 async def step2_style_references(
     session_id: str,
@@ -569,9 +625,10 @@ async def step2_style_references(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Step 2: Submit style references for the generation job.
+    Step 2: Submit style references and musical attributes for the generation job.
     
-    This endpoint collects reference files that will influence the style of the generated music.
+    This endpoint collects reference files that will influence the style of the generated music,
+    along with instrument selections, style preferences, voice type, and duration settings.
     """
     try:
         user_id = current_user["uid"]
@@ -601,32 +658,58 @@ async def step2_style_references(
         # Update session data
         session_data["step"] = 2
         session_data["updated_at"] = datetime.now().isoformat()
-        session_data["style_references"] = request.style_references.dict()
-        session_data["reference_usage_mode"] = request.reference_usage_mode
         
-        # Add helper function
-        def file_exists(file_id: str, user_id: str) -> bool:
-            """Check if a file exists and belongs to the user."""
-            # In a real implementation, query your database
-            # For now, we'll just check if the file_id is not empty
-            return bool(file_id)
-
-        # In step2 endpoint
-        if request.style_references:
-            for ref_id in request.style_references.music_references or []:
-                if not file_exists(ref_id, user_id):
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Reference file {ref_id} not found or doesn't belong to you"
-                    )
+        # Process style references
+        if hasattr(request, "style_references") and request.style_references:
+            session_data["style_references"] = request.style_references.dict()
+            
+            # Validate file references exist
+            if validate_file_references(request.style_references, user_id) is False:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="One or more reference files not found or don't belong to you"
+                )
         
-        # Define next step information
-        next_step = {
-            "step": 3,
-            "endpoint": f"/api/music/step3/{session_id}",
-            "description": "Submit musical attributes",
-            "required_fields": ["instruments", "styles_themes", "pitch", "tempo"]
-        }
+        # Process reference usage mode
+        session_data["reference_usage_mode"] = request.reference_usage_mode or "guidance_only"
+        
+        # Process instruments selection
+        session_data["instruments"] = request.instruments or []
+        session_data["instruments_to_avoid"] = request.instruments_to_avoid or []
+        
+        # Process styles and themes
+        session_data["styles_themes"] = request.styles_themes or []
+        session_data["styles_themes_to_avoid"] = request.styles_themes_to_avoid or []
+        
+        # Process musical attributes
+        session_data["pitch"] = request.pitch
+        session_data["tempo"] = request.tempo
+        
+        # Process voice type if vocals are required
+        if session_data["vocal_settings"] in ["with_vocals", "only_vocals"]:
+            session_data["voice_type"] = request.voice_type or "neutral"
+        
+        # Process track duration (limit to 5 minutes = 300 seconds)
+        requested_duration = request.duration or 180  # Default 3 minutes
+        session_data["duration"] = min(requested_duration, 300)
+        
+        # Determine next step based on session data
+        if session_data["lyrics_settings"] != "no_lyrics" and not session_data.get("generated_lyrics"):
+            # If lyrics are needed but not yet generated, go to step 3 for lyrics
+            next_step = {
+                "step": 3,
+                "endpoint": f"/api/music/step3/{session_id}",
+                "description": "Generate or review lyrics",
+                "required_fields": []
+            }
+        else:
+            # Skip to step 4 for music generation
+            next_step = {
+                "step": 4,
+                "endpoint": f"/api/music/step4/{session_id}",
+                "description": "Review generation parameters and start generation",
+                "required_fields": []
+            }
         
         return model_types.StepResponse(
             session_id=session_id,
@@ -642,6 +725,38 @@ async def step2_style_references(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process step 2: {str(e)}"
         )
+
+def validate_file_references(style_references, user_id):
+    """Validate that all referenced files exist and belong to the user."""
+    try:
+        # Check music references
+        if hasattr(style_references, "music_references") and style_references.music_references:
+            for ref_id in style_references.music_references:
+                if not file_exists(ref_id, user_id):
+                    return False
+        
+        # Check vocal references
+        if hasattr(style_references, "vocals_references") and style_references.vocals_references:
+            for ref_id in style_references.vocals_references:
+                if not file_exists(ref_id, user_id):
+                    return False
+        
+        # Check lyrics references
+        if hasattr(style_references, "lyrics_references") and style_references.lyrics_references:
+            for ref_id in style_references.lyrics_references:
+                if not file_exists(ref_id, user_id):
+                    return False
+                    
+        return True
+    except Exception as e:
+        print(f"Error validating file references: {str(e)}")
+        return False
+
+def file_exists(file_id, user_id):
+    """Check if a file exists and belongs to the user."""
+    # In a real implementation, query your database
+    # For now, we'll just check if the file_id is not empty
+    return bool(file_id)
 
 @router.post("/step3/{session_id}", response_model=model_types.StepResponse)
 async def step3_musical_attributes(
